@@ -1,3 +1,25 @@
+#!/usr/bin/env node
+
+/**
+ * ╔══════════════════════════════════════════════════════════════════════════════╗
+ * ║  TikTok Downloader - Retro Computer Edition v3.0                             ║
+ * ║  Project: TikTok Downloader                                                  ║
+ * ║  Created by: NexaDev                                                         ║
+ * ║  Scraper by: Ditzzx                                                          ║
+ * ╚══════════════════════════════════════════════════════════════════════════════╝
+ * 
+ *  Controls:
+ *    Ctrl+A  → Copy URL to clipboard
+ *    Ctrl+B  → Download video to /storage/emulated/0/
+ *    Ctrl+R  → Reset form
+ *    Ctrl+C  → Quit application
+ *    Alt+N   → About dialog
+ *    Alt+M   → Close about dialog
+ *    Enter   → Process URL
+ *    Tab     → Next field
+ *    ↑/↓     → Select link
+ */
+
 import blessed from "blessed";
 import { spawn } from "child_process";
 import fs from "node:fs";
