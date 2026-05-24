@@ -1,31 +1,17 @@
-#!/usr/bin/env node
-
-/**
- * ╔══════════════════════════════════════════════════════════════════════════════╗
- * ║  TikTok Downloader v2.0 — RETRO TERMINAL EDITION                          ║
- * ║  CRT Phosphor Green  •  Norton Commander Style  •  Old School BIOS         ║
- * ╚══════════════════════════════════════════════════════════════════════════════╝
- *
- *  Controls:
- *    F1 / Enter   → Download
- *    F2 / Ctrl+A  → Copy selected URL to clipboard
- *    F3 / Ctrl+R  → Reset form
- *    F10 / Ctrl+Q → Quit
- *    Tab          → Toggle focus (input ↔ links)
- *    ↑ / ↓        → Select download link
- */
-
-import axios      from "axios";
-import FormData   from "form-data";
+import axios         from "axios";
+import FormData      from "form-data";
 import { CookieJar } from "tough-cookie";
 import * as cheerio  from "cheerio";
-import vm         from "node:vm";
-import crypto     from "node:crypto";
-import blessed    from "blessed";
-import { spawn }  from "child_process";
-import fs         from "node:fs";
-import os         from "node:os";
-import path       from "node:path";
+import vm            from "node:vm";
+import crypto        from "node:crypto";
+import blessed       from "blessed";
+import { spawn }     from "child_process";
+import fs            from "node:fs";
+import os            from "node:os";
+import path          from "node:path";
+import https         from "node:https";
+import { pipeline }  from "node:stream/promises";
+import { createWriteStream } from "node:fs";
 
 const BASE = "https://snaptik.app";
 const PAGE = `${BASE}/en2`;
@@ -37,10 +23,6 @@ const UA =
   "(KHTML, like Gecko) Chrome/147.0.0.0 Mobile Safari/537.36";
 
 const jar = new CookieJar();
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  SNAPTIK API FUNCTIONS  (unchanged)
-// ═══════════════════════════════════════════════════════════════════════════════
 
 function autoToken() {
   const unix = Math.floor(Date.now() / 1000).toString();
@@ -58,12 +40,12 @@ async function getCookieHeader() {
 
 function commonHeaders(extra = {}) {
   return {
-    "user-agent"       : UA,
-    "accept-language"  : "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-    "sec-ch-ua"        : '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
-    "sec-ch-ua-mobile" : "?1",
+    "user-agent"        : UA,
+    "accept-language"   : "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+    "sec-ch-ua"         : '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+    "sec-ch-ua-mobile"  : "?1",
     "sec-ch-ua-platform": '"Android"',
-    "x-request-id"    : crypto.randomUUID(),
+    "x-request-id"     : crypto.randomUUID(),
     ...extra
   };
 }
@@ -103,13 +85,13 @@ async function submitVideo(url, token) {
     validateStatus: () => true,
     headers: {
       ...commonHeaders({
-        accept: "*/*",
-        origin: BASE,
-        referer: PAGE,
+        accept        : "*/*",
+        origin        : BASE,
+        referer       : PAGE,
         "sec-fetch-site": "same-origin",
         "sec-fetch-mode": "cors",
         "sec-fetch-dest": "empty",
-        priority: "u=1, i",
+        priority      : "u=1, i",
         cookie
       }),
       ...form.getHeaders()
@@ -134,7 +116,7 @@ function decodeObfuscatedResponse(body) {
 }
 
 async function extractResult(decodedJs) {
-  const dom = new Map();
+  const dom       = new Map();
   const fakeDollar = selector => {
     if (!dom.has(selector)) {
       dom.set(selector, {
@@ -151,18 +133,18 @@ async function extractResult(decodedJs) {
       getElementById() { return { src: "", style: {} }; },
       querySelector()  { return { innerHTML: "", style: {} }; }
     },
-    window: { location: { hostname: "snaptik.app" } },
-    gtag() {},
-    fetch: async () => ({ json: async () => ({}) }),
-    $: fakeDollar
+    window  : { location: { hostname: "snaptik.app" } },
+    gtag()  {},
+    fetch   : async () => ({ json: async () => ({}) }),
+    $       : fakeDollar
   };
   try {
     vm.createContext(context);
     vm.runInContext(decodedJs, context, { timeout: 3000 });
   } catch {}
 
-  const html = dom.get("#download")?.innerHTML || decodedJs;
-  const $    = cheerio.load(html);
+  const html  = dom.get("#download")?.innerHTML || decodedJs;
+  const $     = cheerio.load(html);
   const links = [];
 
   $("a[href]").each((_, el) => {
@@ -170,18 +152,18 @@ async function extractResult(decodedJs) {
     const href = $(el).attr("href");
     if (!href) return;
     const lc = text.toLowerCase();
-    if (lc.includes("download with app"))     return;
-    if (lc.includes("download other video"))  return;
-    if (href === "/")                          return;
-    if (href.includes("play.google.com"))      return;
+    if (lc.includes("download with app"))    return;
+    if (lc.includes("download other video")) return;
+    if (href === "/")                        return;
+    if (href.includes("play.google.com"))    return;
     links.push({ text: text || "Download", url: href });
   });
 
   return {
-    title     : $(".video-title").first().text().trim() || null,
-    author    : $(".info span").first().text().trim()   || null,
-    thumbnail : $("#thumbnail").attr("src") || $(".avatar").attr("src") ||
-                $("img").first().attr("src") || null,
+    title       : $(".video-title").first().text().trim() || null,
+    author      : $(".info span").first().text().trim()   || null,
+    thumbnail   : $("#thumbnail").attr("src") || $(".avatar").attr("src") ||
+                  $("img").first().attr("src") || null,
     render_token: $(".btn-render").attr("data-token") || null,
     links
   };
@@ -189,11 +171,11 @@ async function extractResult(decodedJs) {
 
 async function renderVideo(renderToken) {
   if (!renderToken) return null;
-  const cookie = await getCookieHeader();
+  const cookie    = await getCookieHeader();
   const renderRes = await axios.get(`${BASE}/render.php`, {
     timeout: 30000,
     validateStatus: () => true,
-    params: { token: renderToken },
+    params : { token: renderToken },
     headers: commonHeaders({ accept: "*/*", referer: PAGE, cookie })
   });
   const taskId = renderRes.data?.task_id;
@@ -203,7 +185,7 @@ async function renderVideo(renderToken) {
     const poll = await axios.get(`${BASE}/task.php`, {
       timeout: 30000,
       validateStatus: () => true,
-      params: { token: taskId },
+      params : { token: taskId },
       headers: commonHeaders({ accept: "*/*", referer: PAGE, cookie: await getCookieHeader() })
     });
     if (poll.data?.download_url) return poll.data;
@@ -212,10 +194,6 @@ async function renderVideo(renderToken) {
   }
   return null;
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-//  CLIPBOARD  (multiple fallback methods)
-// ═══════════════════════════════════════════════════════════════════════════════
 
 async function copyToClipboard(text) {
   const platform = process.platform;
@@ -227,48 +205,74 @@ async function copyToClipboard(text) {
     proc.stdin.end();
     proc.stderr.on("data", d => { err += d.toString(); });
     proc.on("error", reject);
-    proc.on("exit", code => code === 0 ? resolve(true) : reject(new Error(`${cmd} exited ${code}: ${err}`)));
+    proc.on("exit", code =>
+      code === 0 ? resolve(true) : reject(new Error(`${cmd} exited ${code}: ${err}`))
+    );
   });
 
   if (platform === "darwin") {
-    try { await tryCmd("pbcopy", [], text); return; } catch (e) { errors.push(`pbcopy: ${e.message}`); }
+    try { await tryCmd("pbcopy", [], text); return "pbcopy"; } catch (e) { errors.push(`pbcopy: ${e.message}`); }
   } else if (platform === "win32") {
-    try { await tryCmd("clip", [], text); return; } catch (e) { errors.push(`clip: ${e.message}`); }
+    try { await tryCmd("clip",   [], text); return "clip";   } catch (e) { errors.push(`clip: ${e.message}`); }
   } else {
+    // Android / Termux first, then X11
     for (const [cmd, args] of [
-      ["wl-copy", []], ["xclip", ["-selection","clipboard"]],
-      ["xsel", ["--clipboard","--input"]], ["termux-clipboard-set", []]
+      ["termux-clipboard-set", []],
+      ["wl-copy",              []],
+      ["xclip",                ["-selection", "clipboard"]],
+      ["xsel",                 ["--clipboard", "--input"]]
     ]) {
-      try { await tryCmd(cmd, args, text); return; } catch (e) { errors.push(`${cmd}: ${e.message}`); }
+      try { await tryCmd(cmd, args, text); return cmd; } catch (e) { errors.push(`${cmd}: ${e.message}`); }
     }
   }
 
   try {
     const osc52 = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`;
     process.stdout.write(osc52);
-    return;
+    return "osc52";
   } catch (e) { errors.push(`OSC52: ${e.message}`); }
 
-  try {
-    const tmp = path.join(os.tmpdir(), `tiktok-url-${Date.now()}.txt`);
-    fs.writeFileSync(tmp, text, "utf8");
-    throw new Error(`Clipboard tools not found. URL saved to: ${tmp}`);
-  } catch (e) {
-    if (e.message.includes("saved to")) throw e;
-    errors.push(`tempfile: ${e.message}`);
-  }
+  const tmp = path.join(os.tmpdir(), `tiktok-url-${Date.now()}.txt`);
+  fs.writeFileSync(tmp, text, "utf8");
+  throw new Error(`Clipboard tools not found. URL saved to:\n${tmp}`);
+}
 
-  throw new Error(
-    `Clipboard failed.\n${errors.map(e => "  • " + e).join("\n")}\n\n` +
-    "Install: xclip / xsel / wl-copy (Linux) | pbcopy (Mac) | clip (Windows)"
-  );
+async function directDownload(url, onProgress) {
+  const filename = `tiktok_${Date.now()}.mp4`;
+  const dest     = path.join(os.homedir(), "Downloads", filename);
+
+  try { fs.mkdirSync(path.dirname(dest), { recursive: true }); } catch {}
+
+  onProgress?.(`Connecting to server…`);
+
+  const res = await axios.get(url, {
+    responseType: "stream",
+    timeout: 120_000,
+    validateStatus: () => true,
+    headers: commonHeaders({ referer: BASE })
+  });
+
+  const total   = parseInt(res.headers["content-length"] || "0", 10);
+  let received  = 0;
+
+  res.data.on("data", chunk => {
+    received += chunk.length;
+    if (total > 0) {
+      const pct = Math.round((received / total) * 100);
+      onProgress?.(`Downloading… ${pct}% (${(received / 1024 / 1024).toFixed(1)} MB)`);
+    } else {
+      onProgress?.(`Downloading… ${(received / 1024 / 1024).toFixed(1)} MB`);
+    }
+  });
+
+  await pipeline(res.data, createWriteStream(dest));
+  return dest;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  RETRO TERMINAL DOWNLOADER  —  CRT Phosphor Green / BIOS / Norton Commander
+//  BOOT POST MESSAGES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Boot POST messages
 const BOOT_LINES = [
   [40,  "{green-fg}RETRO-DL BIOS v2.0    Copyright (C) 2024 TikTok Downloader Project{/green-fg}"],
   [20,  "{green-fg}═══════════════════════════════════════════════════════════════════{/green-fg}"],
@@ -290,6 +294,10 @@ const BOOT_LINES = [
   [80,  "{yellow-fg}Running POST memory test...{/yellow-fg}"],
 ];
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MAIN TUI CLASS
+// ═══════════════════════════════════════════════════════════════════════════════
+
 class RetroTerminalDownloader {
   constructor() {
     this.screen = blessed.screen({
@@ -309,8 +317,6 @@ class RetroTerminalDownloader {
     };
 
     this._timers = [];
-
-    // kick off boot animation then main UI
     this._showBoot();
   }
 
@@ -323,10 +329,13 @@ class RetroTerminalDownloader {
   }
 
   _buildFkeyBar() {
-    // Classic Norton Commander F-key row
     const keys = [
-      ["F1","DOWNLOAD"], ["F2","COPY URL"], ["F3","RESET  "],
-      ["F5","↑↓ SEL  "], ["F9","ABOUT   "], ["F10","QUIT   "]
+      ["F1","DOWNLOAD"],
+      ["F2","COPY URL"],
+      ["F3","SAVE FILE"],
+      ["F4","RESEARCH"],
+      ["F9","ABOUT   "],
+      ["F10","QUIT   "]
     ];
     return keys.map(([k, lbl]) =>
       `{black-fg}{white-bg}${k}{/white-bg}{/black-fg}` +
@@ -339,14 +348,12 @@ class RetroTerminalDownloader {
   async _showBoot() {
     const scr = this.screen;
 
-    // full-screen black canvas
     const bootBg = blessed.box({
       parent: scr,
       top: 0, left: 0, width: "100%", height: "100%",
       style: { bg: "black" }
     });
 
-    // ASCII art block (green, centred)
     blessed.box({
       parent: bootBg,
       top: 1, left: "center",
@@ -354,17 +361,16 @@ class RetroTerminalDownloader {
       style: { fg: "green", bg: "black" },
       tags: true,
       content: [
-        "{green-fg}  ████████╗██╗██╗  ██╗████████╗ ██████╗ ██╗  ██╗   ██████╗ ██╗    {/green-fg}",
-        "{green-fg}     ██╔══╝██║██║ ██╔╝╚══██╔══╝██╔═══██╗██║ ██╔╝   ██╔══██╗██║    {/green-fg}",
-        "{green-fg}     ██║   ██║█████╔╝    ██║   ██║   ██║█████╔╝    ██║  ██║██║    {/green-fg}",
-        "{green-fg}     ██║   ██║██╔══██╗   ██║   ██║   ██║██╔══██╗   ██║  ██║██║    {/green-fg}",
-        "{green-fg}     ╚═╝   ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═════╝ ╚══════╝{/green-fg}",
-        "{yellow-fg}                    [ DOWNLOADER  v2.0 ]  RETRO TERMINAL EDITION         {/yellow-fg}",
-        "{green-fg}  ───────────────────────────────────────────────────────────────────  {/green-fg}",
+        "{green-fg}  ████████╗██╗██╗  ██╗████████╗ ██████╗ ██╗  ██╗   ██████╗ ██╗   {/green-fg}",
+        "{green-fg}     ██╔══╝██║██║ ██╔╝╚══██╔══╝██╔═══██╗██║ ██╔╝   ██╔══██╗██║   {/green-fg}",
+        "{green-fg}     ██║   ██║█████╔╝    ██║   ██║   ██║█████╔╝    ██║  ██║██║   {/green-fg}",
+        "{green-fg}     ██║   ██║██╔══██╗   ██║   ██║   ██║██╔══██╗   ██║  ██║██║   {/green-fg}",
+        "{green-fg}     ╚═╝   ╚═╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝   ╚═════╝╚══════╝{/green-fg}",
+        "{yellow-fg}                   [ DOWNLOADER  v2.0 ]  RETRO TERMINAL EDITION        {/yellow-fg}",
+        "{green-fg}  ──────────────────────────────────────────────────────────────────  {/green-fg}",
       ].join("\n")
     });
 
-    // scrollable boot log
     const bootLog = blessed.log({
       parent: bootBg,
       top: 9, left: 3, width: "100%-6", height: "100%-14",
@@ -374,7 +380,6 @@ class RetroTerminalDownloader {
       alwaysScroll: true,
     });
 
-    // memory-test progress bar (dedicated box, fixed near bottom)
     const memBar = blessed.box({
       parent: bootBg,
       bottom: 3, left: 3, width: "100%-6", height: 1,
@@ -383,7 +388,6 @@ class RetroTerminalDownloader {
       content: ""
     });
 
-    // "ready" line at very bottom
     const readyLine = blessed.box({
       parent: bootBg,
       bottom: 1, left: 0, width: "100%", height: 1,
@@ -395,14 +399,12 @@ class RetroTerminalDownloader {
 
     scr.render();
 
-    // print POST lines one by one
     for (const [delay, msg] of BOOT_LINES) {
       await this._sleep(delay);
       bootLog.log(msg);
       scr.render();
     }
 
-    // animated memory-test bar
     for (let i = 0; i <= 100; i += 2) {
       const filled = Math.floor(i * 24 / 100);
       const bar    = "█".repeat(filled) + "░".repeat(24 - filled);
@@ -423,23 +425,21 @@ class RetroTerminalDownloader {
     scr.render();
     await this._sleep(350);
 
-    // flash "ready" at the bottom
     readyLine.style.fg = "black";
     readyLine.style.bg = "green";
     readyLine.setContent("{bold}{black-fg}  System ready. Initializing display adapter...  {/black-fg}{/bold}");
     scr.render();
     await this._sleep(600);
 
-    // tear down boot screen, build main UI
     bootBg.destroy();
     this._initMainUI();
     this._bindKeys();
     this._startClock();
     this._startBlink();
 
-    // initial log messages
     this._log("{green-fg}System online ─ TikTok Downloader v2.0{/green-fg}");
-    this._log("{white-fg}Paste a TikTok URL and press {yellow-fg}[Enter]{/yellow-fg}{white-fg} or {yellow-fg}[F1]{/yellow-fg}{white-fg} to download.{/white-fg}");
+    this._log("{white-fg}Paste a TikTok URL then press {yellow-fg}[Enter]{/yellow-fg}{white-fg} or {yellow-fg}[F1]{/yellow-fg}{white-fg} to start.{/white-fg}");
+    this._log("{cyan-fg}Shortcuts: Ctrl+A=Save  Ctrl+B=Copy  Ctrl+F=Research  Ctrl+H=About  Ctrl+C=Quit{/cyan-fg}");
     this._setStatus("STANDBY", "green");
   }
 
@@ -448,14 +448,13 @@ class RetroTerminalDownloader {
   _initMainUI() {
     const scr = this.screen;
 
-    // ─── Root black canvas ──────────────────────────────────────────────────
     this.root = blessed.box({
       parent: scr,
       top: 0, left: 0, width: "100%", height: "100%",
       style: { bg: "black" }
     });
 
-    // ─── Top menu bar (inverted — Norton Commander style) ───────────────────
+    // ── Top menu bar ──
     this.menuBar = blessed.box({
       parent: this.root,
       top: 0, left: 0, width: "100%", height: 1,
@@ -467,7 +466,6 @@ class RetroTerminalDownloader {
         "  {bold}│{/bold}  NodeJS " + process.versions.node
     });
 
-    // Clock widget (right side of menu bar)
     this.clockBox = blessed.box({
       parent: this.root,
       top: 0, right: 0, width: 11, height: 1,
@@ -477,18 +475,15 @@ class RetroTerminalDownloader {
       content: " 00:00:00 "
     });
 
-    // ─── Main outer frame (green border on black) ───────────────────────────
+    // ── Main outer frame ──
     this.frame = blessed.box({
       parent: this.root,
       top: 1, left: 0, width: "100%", height: "100%-2",
       border: { type: "line" },
-      style: {
-        fg: "green", bg: "black",
-        border: { fg: "green" }
-      }
+      style: { fg: "green", bg: "black", border: { fg: "green" } }
     });
 
-    // ─── Small decorative title inside frame ────────────────────────────────
+    // ── Title / logo strip ──
     this.titleArea = blessed.box({
       parent: this.frame,
       top: 0, left: 1, width: "100%-2", height: 3,
@@ -501,7 +496,7 @@ class RetroTerminalDownloader {
       ].join("\n")
     });
 
-    // ─── URL input row ──────────────────────────────────────────────────────
+    // ── URL input row ──
     this.urlPrompt = blessed.box({
       parent: this.frame,
       top: 4, left: 1, width: 14, height: 1,
@@ -513,16 +508,12 @@ class RetroTerminalDownloader {
     this.inputBox = blessed.textbox({
       parent: this.frame,
       top: 4, left: 15, width: "100%-17", height: 1,
-      style: {
-        fg: "green", bg: "black",
-        focus: { fg: "white", bg: "black" }
-      },
+      style: { fg: "green", bg: "black", focus: { fg: "white", bg: "black" } },
       inputOnFocus: true,
       value: "",
       tags: false
     });
 
-    // underline below URL row
     this.inputLine = blessed.box({
       parent: this.frame,
       top: 5, left: 1, width: "100%-2", height: 1,
@@ -531,7 +522,7 @@ class RetroTerminalDownloader {
       content: " " + this._hline(76)
     });
 
-    // ─── Progress row ───────────────────────────────────────────────────────
+    // ── Progress row ──
     this.progressPrompt = blessed.box({
       parent: this.frame,
       top: 6, left: 1, width: 12, height: 1,
@@ -548,7 +539,6 @@ class RetroTerminalDownloader {
       content: "{green-fg}[" + "░".repeat(28) + "]{/green-fg} {white-fg}  0%{/white-fg}"
     });
 
-    // blinking status dot
     this.blinkDot = blessed.box({
       parent: this.frame,
       top: 6, right: 22, width: 2, height: 1,
@@ -566,7 +556,6 @@ class RetroTerminalDownloader {
       content: "{bold}STANDBY{/bold}"
     });
 
-    // separator
     this.sep2 = blessed.box({
       parent: this.frame,
       top: 7, left: 1, width: "100%-2", height: 1,
@@ -575,7 +564,7 @@ class RetroTerminalDownloader {
       content: " " + this._hline(76)
     });
 
-    // ─── Column headers (inverted) ──────────────────────────────────────────
+    // ── Column headers (inverted) ──
     this.logHeader = blessed.box({
       parent: this.frame,
       top: 8, left: 1, width: "55%", height: 1,
@@ -594,45 +583,41 @@ class RetroTerminalDownloader {
       content: "{bold} ▸ DOWNLOAD LINKS {/bold}"
     });
 
-    // ─── Log panel ──────────────────────────────────────────────────────────
-    this.logBox = blessed.log({
+    // ── Log panel (left column) ──
+    this.logPanel = blessed.log({
       parent: this.frame,
       top: 9, left: 1, width: "55%", height: "100%-12",
-      border: { type: "line" },
-      style: {
-        fg: "green", bg: "black",
-        border: { fg: "green" },
-        scrollbar: { bg: "green", fg: "black" }
-      },
+      style: { fg: "green", bg: "black" },
+      tags: true,
       scrollable: true,
       alwaysScroll: true,
-      tags: true,
-      scrollbar: { ch: "▒", style: { bg: "green" } }
+      scrollbar: { ch: "│", style: { fg: "green" } }
     });
 
-    // ─── Result panel ───────────────────────────────────────────────────────
-    this.resultBox = blessed.box({
+    // ── Column divider ──
+    this.divider = blessed.line({
+      parent: this.frame,
+      top: 8, left: "55%+1", width: 1, height: "100%-10",
+      orientation: "vertical",
+      style: { fg: "green", bg: "black" }
+    });
+
+    // ── Results panel (right column) ──
+    this.resultPanel = blessed.list({
       parent: this.frame,
       top: 9, left: "55%+2", width: "44%-3", height: "100%-12",
-      border: { type: "line" },
       style: {
         fg: "green", bg: "black",
-        border: { fg: "green" },
-        scrollbar: { bg: "green", fg: "black" }
+        selected: { fg: "black", bg: "green" }
       },
-      scrollable: true,
-      alwaysScroll: true,
       tags: true,
-      scrollbar: { ch: "▒", style: { bg: "green" } },
-      content:
-        "\n {white-fg}No results yet.{/white-fg}\n\n" +
-        " Paste a TikTok URL above,\n" +
-        " then press {yellow-fg}[F1]{/yellow-fg} or {yellow-fg}[Enter]{/yellow-fg}\n" +
-        " to start downloading.\n\n" +
-        " {green-fg}▸ Links will appear here.{/green-fg}"
+      keys: true,
+      mouse: true,
+      vi: true,
+      items: ["{dim-fg}  — no results yet —{/dim-fg}"]
     });
 
-    // ─── F-key bar (bottom, Norton Commander style) ─────────────────────────
+    // ── F-key bar at very bottom ──
     this.fkeyBar = blessed.box({
       parent: this.root,
       bottom: 0, left: 0, width: "100%", height: 1,
@@ -641,301 +626,414 @@ class RetroTerminalDownloader {
       content: this._buildFkeyBar()
     });
 
+    // initial focus on input
+    this.inputBox.focus();
     scr.render();
   }
 
-  // ── clock & blink ──────────────────────────────────────────────────────────
+  // ── bind ALL keyboard shortcuts ────────────────────────────────────────────
+
+  _bindKeys() {
+    const scr = this.screen
+    
+    scr.key(["f1"], () => this._startDownload());
+    this.inputBox.key(["enter"], () => this._startDownload());
+
+    scr.key(["C-a", "f3"], () => this._saveSelectedFile());
+
+    scr.key(["C-b", "f2"], () => this._copySelectedUrl());
+
+    scr.key(["C-f", "f4"], () => this._showResearchPanel());
+
+    scr.key(["C-h", "f9"], () => this._showAboutPanel());
+
+    scr.key(["C-c", "f10"], () => this._quit());
+
+    scr.key(["C-l"], () => {
+      this.logPanel.setContent("");
+      this.screen.render();
+    });
+
+    scr.key(["tab"], () => {
+      if (this.state.focus === "input") {
+        this.state.focus = "results";
+        this.resultPanel.focus();
+      } else {
+        this.state.focus = "input";
+        this.inputBox.focus();
+      }
+      this.screen.render();
+    });
+
+    this.resultPanel.on("select item", (_, idx) => {
+      this.state.selectedLink = idx;
+    });
+  }
 
   _startClock() {
     const tick = () => {
       if (!this.clockBox) return;
-      const now = new Date();
-      const hh  = String(now.getHours()).padStart(2, "0");
-      const mm  = String(now.getMinutes()).padStart(2, "0");
-      const ss  = String(now.getSeconds()).padStart(2, "0");
-      this.clockBox.setContent(` ${hh}:${mm}:${ss} `);
+      const n   = new Date();
+      const pad = v => String(v).padStart(2, "0");
+      this.clockBox.setContent(` ${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())} `);
       this.screen.render();
     };
     tick();
-    this._timers.push(setInterval(tick, 1000));
+    const t = setInterval(tick, 1000);
+    this._timers.push(t);
   }
 
   _startBlink() {
-    this._timers.push(setInterval(() => {
-      this.state.blinkOn = !this.state.blinkOn;
+    const t = setInterval(() => {
       if (!this.blinkDot) return;
-
-      if (this.state.processing) {
-        // fast amber blink while processing
-        this.blinkDot.setContent(
-          this.state.blinkOn ? "{yellow-fg}◉{/yellow-fg}" : "{black-fg}◉{/black-fg}"
-        );
-      } else {
-        // steady green when idle
-        this.blinkDot.setContent("{green-fg}●{/green-fg}");
-      }
+      this.state.blinkOn = !this.state.blinkOn;
+      const col = this.state.blinkOn
+        ? (this.state.processing ? "yellow" : "green")
+        : "black";
+      this.blinkDot.setContent(`{${col}-fg}●{/${col}-fg}`);
       this.screen.render();
-    }, 450));
+    }, 600);
+    this._timers.push(t);
   }
-
-  // ── log / status / progress ────────────────────────────────────────────────
 
   _log(msg) {
-    if (!this.logBox) return;
     const ts = new Date().toLocaleTimeString("id-ID", { hour12: false });
-    this.logBox.log(`{green-fg}[${ts}]{/green-fg} ${msg}`);
+    this.logPanel.log(`{dim-fg}[${ts}]{/dim-fg} ${msg}`);
     this.screen.render();
   }
 
-  _setStatus(text, color = "yellow") {
-    if (!this.statusLabel) return;
-    this.statusLabel.setContent(`{${color}-fg}{bold}${text}{/bold}{/${color}-fg}`);
+  _setStatus(label, color = "yellow") {
+    this.statusLabel.setContent(`{bold}{${color}-fg}${label}{/${color}-fg}{/bold}`);
     this.screen.render();
   }
 
-  _setProgress(pct) {
-    if (!this.progressBar) return;
-    const total  = 28;
-    const filled = Math.floor((pct / 100) * total);
-    const empty  = total - filled;
-    const bar    = "█".repeat(filled) + "░".repeat(empty);
-    const pctStr = String(pct).padStart(3, " ");
+  _setProgress(pct, label = "") {
+    const filled = Math.floor(pct * 28 / 100);
+    const bar    = "█".repeat(filled) + "░".repeat(28 - filled);
+    const pctStr = String(pct).padStart(3);
+    const extra  = label ? `  {white-fg}${label}{/white-fg}` : "";
     this.progressBar.setContent(
-      `{green-fg}[${bar}]{/green-fg} {white-fg}${pctStr}%{/white-fg}`
+      `{green-fg}[${bar}]{/green-fg} {yellow-fg}${pctStr}%{/yellow-fg}${extra}`
     );
     this.screen.render();
   }
 
-  // ── key bindings ───────────────────────────────────────────────────────────
-
-  _bindKeys() {
-    // F1 / Enter → download
-    this.screen.key(["f1"], async () => {
-      const url = this.inputBox.getValue().trim();
-      if (!url) { this._log("{yellow-fg}⚠ URL is empty!{/yellow-fg}"); return; }
-      await this._download(url);
-    });
-    this.inputBox.key(["enter"], async () => {
-      const url = this.inputBox.getValue().trim();
-      if (!url) { this._log("{yellow-fg}⚠ URL is empty!{/yellow-fg}"); return; }
-      await this._download(url);
-    });
-
-    // F2 / Ctrl+A → copy
-    this.screen.key(["f2", "C-a"], async () => { await this._copyUrl(); });
-
-    // F3 / Ctrl+R → reset
-    this.screen.key(["f3", "C-r"], () => { this._reset(); });
-
-    // F9 → about
-    this.screen.key(["f9"], () => {
-      this._log("{cyan-fg}─── About ────────────────────────────────────{/cyan-fg}");
-      this._log("{white-fg}TikTok Downloader v2.0  —  Retro Terminal Edition{/white-fg}");
-      this._log("{white-fg}Powered by: SnapTik API + blessed TUI{/white-fg}");
-      this._log("{cyan-fg}──────────────────────────────────────────────{/cyan-fg}");
-    });
-
-    // F10 / Ctrl+Q → quit
-    this.screen.key(["f10", "C-q"], () => { this._quit(); });
-
-    // Tab → cycle focus
-    this.screen.key(["tab"], () => {
-      if (this.state.focus === "input") {
-        this.resultBox.focus();
-        this.state.focus = "result";
-        this._setStatus("NAV MODE", "cyan");
-      } else {
-        this.inputBox.focus();
-        this.state.focus = "input";
-        this._setStatus("INPUT MODE", "cyan");
-      }
-    });
-
-    // ↑ / ↓ → navigate links
-    this.screen.key(["up"], () => {
-      if (this.state.result?.links?.length > 0) {
-        this.state.selectedLink = Math.max(0, this.state.selectedLink - 1);
-        this._displayResult(this.state.result, null);
-      }
-    });
-    this.screen.key(["down"], () => {
-      if (this.state.result?.links?.length > 0) {
-        this.state.selectedLink = Math.min(
-          this.state.result.links.length - 1,
-          this.state.selectedLink + 1
-        );
-        this._displayResult(this.state.result, null);
-      }
-    });
-
-    this.inputBox.focus();
-  }
-
-  // ── actions ────────────────────────────────────────────────────────────────
-
-  async _copyUrl() {
-    if (!this.state.result?.links?.length) {
-      this._log("{yellow-fg}⚠ No URL available to copy!{/yellow-fg}");
+  _updateResultPanel() {
+    const r = this.state.result;
+    if (!r || !r.links?.length) {
+      this.resultPanel.setItems(["{dim-fg}  — no links found —{/dim-fg}"]);
+      this.screen.render();
       return;
     }
-    const url = this.state.result.links[this.state.selectedLink]?.url ||
-                this.state.result.links[0].url;
+    const items = r.links.map((l, i) => {
+      const num  = `{yellow-fg}[${i + 1}]{/yellow-fg}`;
+      const label = l.text.length > 22 ? l.text.slice(0, 20) + "…" : l.text;
+      return ` ${num} {green-fg}${label}{/green-fg}`;
+    });
+    this.resultPanel.setItems(items);
+    this.resultPanel.select(0);
+    this.state.selectedLink = 0;
+    this.screen.render();
+  }
+
+  async _startDownload() {
+    if (this.state.processing) {
+      this._log("{yellow-fg}Already processing, please wait…{/yellow-fg}");
+      return;
+    }
+
+    const url = this.inputBox.getValue().trim();
+    if (!url) {
+      this._log("{red-fg}✖ No URL entered. Paste a TikTok link first.{/red-fg}");
+      return;
+    }
+    if (!url.includes("tiktok.com") && !url.includes("vm.tiktok") && !url.includes("vt.tiktok")) {
+      this._log("{red-fg}✖ URL does not look like a TikTok link.{/red-fg}");
+      return;
+    }
+
+    this.state.processing = true;
+    this.state.result     = null;
+    this._setStatus("WORKING", "yellow");
+    this._setProgress(0);
+    this.resultPanel.setItems(["{dim-fg}  Fetching…{/dim-fg}"]);
+    this.screen.render();
+
     try {
-      await copyToClipboard(url);
-      this._log("{green-fg}✓ URL copied to clipboard!{/green-fg}");
-      this._setStatus("COPIED!", "green");
+      this._log("{cyan-fg}→ Opening SnapTik homepage…{/cyan-fg}");
+      this._setProgress(10);
+      const { token } = await openHome();
+
+      this._log(`{cyan-fg}→ Token acquired: {/cyan-fg}{white-fg}${token.slice(0, 20)}…{/white-fg}`);
+      this._setProgress(30);
+
+      this._log("{cyan-fg}→ Submitting video URL to API…{/cyan-fg}");
+      const { body } = await submitVideo(url, token);
+      this._setProgress(55);
+
+      this._log("{cyan-fg}→ Decoding obfuscated response…{/cyan-fg}");
+      const decoded = decodeObfuscatedResponse(body);
+      this._setProgress(70);
+
+      this._log("{cyan-fg}→ Extracting download links…{/cyan-fg}");
+      const result = await extractResult(decoded);
+      this._setProgress(90);
+
+      if (result.render_token) {
+        this._log("{cyan-fg}→ Render token found, rendering…{/cyan-fg}");
+        const rendered = await renderVideo(result.render_token);
+        if (rendered?.download_url)
+          result.links.unshift({ text: "No Watermark (rendered)", url: rendered.download_url });
+      }
+
+      this.state.result = result;
+      this._setProgress(100);
+      this._updateResultPanel();
+
+      if (result.title)  this._log(`{white-fg}Title  : {/white-fg}{green-fg}${result.title}{/green-fg}`);
+      if (result.author) this._log(`{white-fg}Author : {/white-fg}{cyan-fg}${result.author}{/cyan-fg}`);
+      this._log(`{green-fg}✔ Found {/green-fg}{yellow-fg}${result.links.length}{/yellow-fg}{green-fg} download link(s). Use ↑↓ then Ctrl+A to save or Ctrl+B to copy URL.{/green-fg}`);
+      this._setStatus("DONE", "green");
+
     } catch (err) {
-      this._log(`{yellow-fg}⚠ ${err.message}{/yellow-fg}`);
-      this._setStatus("COPY FAIL", "red");
+      this._log(`{red-fg}✖ Error: ${err.message}{/red-fg}`);
+      this._setStatus("ERROR", "red");
+      this._setProgress(0);
+    } finally {
+      this.state.processing = false;
     }
   }
 
-  _reset() {
-    this.inputBox.setValue("");
-    this.resultBox.setContent(
-      "\n {white-fg}Cleared. Ready for new URL.{/white-fg}\n\n" +
-      " {green-fg}▸ Paste URL above and press [F1]{/green-fg}"
-    );
-    this.state.result       = null;
-    this.state.selectedLink = 0;
+  async _saveSelectedFile() {
+    const links = this.state.result?.links;
+    if (!links?.length) {
+      this._log("{red-fg}✖ No download links. Run a download first.{/red-fg}");
+      return;
+    }
+    if (this.state.processing) {
+      this._log("{yellow-fg}⚠ Already processing.{/yellow-fg}");
+      return;
+    }
+
+    const idx  = this.state.selectedLink;
+    const link = links[idx];
+    if (!link) {
+      this._log("{red-fg}✖ No link selected.{/red-fg}");
+      return;
+    }
+
+    this.state.processing = true;
+    this._setStatus("SAVING", "yellow");
+    this._log(`{cyan-fg}→ Downloading: {/cyan-fg}{white-fg}${link.text}{/white-fg}`);
     this._setProgress(0);
-    this._log("{white-fg}── Reset ──────────────────────────────────────────{/white-fg}");
-    this._setStatus("STANDBY", "green");
-    this.inputBox.focus();
-    this.state.focus = "input";
-    this.screen.render();
+
+    try {
+      const dest = await directDownload(link.url, msg => {
+        this._log(`{dim-fg}  ${msg}{/dim-fg}`);
+        const m = msg.match(/(\d+)%/);
+        if (m) this._setProgress(parseInt(m[1], 10));
+      });
+
+      this._setProgress(100);
+      this._log(`{green-fg}✔ Saved to: {/green-fg}{white-fg}${dest}{/white-fg}`);
+      this._setStatus("SAVED", "green");
+    } catch (err) {
+      this._log(`{red-fg}✖ Save failed: ${err.message}{/red-fg}`);
+      this._setStatus("ERROR", "red");
+      this._setProgress(0);
+    } finally {
+      this.state.processing = false;
+    }
+  }
+
+  async _copySelectedUrl() {
+    const links = this.state.result?.links;
+    if (!links?.length) {
+      this._log("{red-fg}✖ No links available. Download something first.{/red-fg}");
+      return;
+    }
+
+    const idx  = this.state.selectedLink;
+    const link = links[idx];
+    if (!link) {
+      this._log("{red-fg}✖ No link selected.{/red-fg}");
+      return;
+    }
+
+    try {
+      const method = await copyToClipboard(link.url);
+      this._log(`{green-fg}✔ Copied to clipboard via {/green-fg}{cyan-fg}${method}{/cyan-fg}`);
+      this._log(`{dim-fg}  ${link.url.slice(0, 70)}…{/dim-fg}`);
+    } catch (err) {
+      this._log(`{red-fg}✖ Clipboard error: ${err.message}{/red-fg}`);
+    }
+  }
+
+  _showResearchPanel() {
+    const scr   = this.screen;
+
+    const overlay = blessed.box({
+      parent: scr,
+      top: "center", left: "center",
+      width: 72, height: 20,
+      border: { type: "line" },
+      style: { fg: "green", bg: "black", border: { fg: "cyan" } },
+      tags: true,
+      label: " {bold}{cyan-fg} RESEARCH / SEARCH {/cyan-fg}{/bold} ",
+      shadow: true
+    });
+
+    blessed.box({
+      parent: overlay,
+      top: 0, left: 1, width: "100%-2", height: 2,
+      style: { fg: "yellow", bg: "black" },
+      tags: true,
+      content: "{bold}Search query:{/bold}"
+    });
+
+    const searchBox = blessed.textbox({
+      parent: overlay,
+      top: 2, left: 1, width: "100%-6", height: 1,
+      style: { fg: "white", bg: "black", focus: { fg: "white", bg: "black" } },
+      inputOnFocus: true,
+      border: { type: "line" },
+      keys: true
+    });
+
+    const resultLog = blessed.log({
+      parent: overlay,
+      top: 4, left: 1, width: "100%-2", height: 11,
+      style: { fg: "green", bg: "black" },
+      tags: true,
+      scrollable: true,
+      alwaysScroll: true,
+      scrollbar: { ch: "│", style: { fg: "green" } }
+    });
+
+    blessed.box({
+      parent: overlay,
+      bottom: 0, left: 0, width: "100%", height: 1,
+      style: { fg: "black", bg: "cyan" },
+      tags: true,
+      content: "  {bold}Enter{/bold} = Search   {bold}Esc{/bold} = Close   {bold}Ctrl+F{/bold} = Close"
+    });
+
+    resultLog.log("{dim-fg}Type a TikTok username or keyword then press Enter.{/dim-fg}");
+    resultLog.log("{dim-fg}Results will open search engines below.{/dim-fg}");
+    resultLog.log("");
+    resultLog.log("{white-fg}Quick links (press number to open):{/white-fg}");
+    resultLog.log("{cyan-fg}  1{/cyan-fg} {white-fg}TikTok Search     https://www.tiktok.com/search{/white-fg}");
+    resultLog.log("{cyan-fg}  2{/cyan-fg} {white-fg}SnapTik           https://snaptik.app{/white-fg}");
+    resultLog.log("{cyan-fg}  3{/cyan-fg} {white-fg}SaveTok           https://savetok.app{/white-fg}");
+
+    const openUrl = url => {
+      const openers = {
+        linux  : ["xdg-open", [url]],
+        darwin : ["open",     [url]],
+        win32  : ["cmd",      ["/c", "start", url]],
+        android: ["termux-open-url", [url]]
+      };
+      const [cmd, args] = openers[process.platform] || openers.linux;
+      spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
+    };
+
+    searchBox.key(["enter"], () => {
+      const q = searchBox.getValue().trim();
+      if (!q) return;
+      resultLog.log(`{yellow-fg}→ Searching: {/yellow-fg}{white-fg}${q}{/white-fg}`);
+      const url = `https://www.google.com/search?q=${encodeURIComponent("TikTok " + q)}`;
+      resultLog.log(`{cyan-fg}  Opening: ${url}{/cyan-fg}`);
+      try { openUrl(url); resultLog.log("{green-fg}  ✔ Browser launched.{/green-fg}"); }
+      catch { resultLog.log("{red-fg}  ✖ Could not open browser.{/red-fg}"); }
+      scr.render();
+    });
+
+    const closePanel = () => {
+      overlay.destroy();
+      this.inputBox.focus();
+      scr.render();
+    };
+
+    overlay.key(["escape", "C-f"], closePanel);
+    searchBox.key(["escape"], closePanel);
+
+    searchBox.focus();
+    scr.render();
+  }
+
+  _showAboutPanel() {
+    const scr = this.screen;
+
+    const overlay = blessed.box({
+      parent: scr,
+      top: "center", left: "center",
+      width: 72, height: 26,
+      border: { type: "line" },
+      style: { fg: "green", bg: "black", border: { fg: "yellow" } },
+      tags: true,
+      label: " {bold}{yellow-fg} ABOUT / HELP {/yellow-fg}{/bold} ",
+      shadow: true
+    });
+
+    overlay.setContent([
+      "",
+      " {yellow-fg}╔═══════════════════════════════════════════════════════════════╗{/yellow-fg}",
+      " {yellow-fg}║{/yellow-fg}  {green-fg}{bold}TikTok Downloader{/bold}{/green-fg}           {yellow-fg}║{/yellow-fg}",
+      " {yellow-fg}╚═══════════════════════════════════════════════════════════════╝{/yellow-fg}",
+      "",
+      "  {white-fg}Author   :{/white-fg} {cyan-fg}acu{/cyan-fg}",
+      "  {white-fg}License  :{/white-fg} {green-fg}MIT{/green-fg}",
+      "  {white-fg}Runtime  :{/white-fg} {green-fg}NodeJS v" + process.versions.node + "{/green-fg}",
+      "  {white-fg}Platform :{/white-fg} {green-fg}" + process.platform + " / " + process.arch + "{/green-fg}",
+      "  {white-fg}Backend  :{/white-fg} {green-fg}SnapTik API  (snaptik.app){/green-fg}",
+      "",
+      " {green-fg}─────────────────────  KEYBOARD SHORTCUTS  ──────────────────────{/green-fg}",
+      "",
+      "  {yellow-fg}Ctrl+A {/yellow-fg} / {yellow-fg}F3 {/yellow-fg}  {white-fg}Download selected link → ~/Downloads{/white-fg}",
+      "  {yellow-fg}Ctrl+B {/yellow-fg} / {yellow-fg}F2 {/yellow-fg}  {white-fg}Copy selected URL to clipboard{/white-fg}",
+      "  {yellow-fg}Ctrl+F {/yellow-fg} / {yellow-fg}F4 {/yellow-fg}  {white-fg}Open Research / search panel{/white-fg}",
+      "  {yellow-fg}Ctrl+H {/yellow-fg} / {yellow-fg}F9 {/yellow-fg}  {white-fg}Show this About panel{/white-fg}",
+      "  {yellow-fg}Ctrl+C {/yellow-fg} / {yellow-fg}F10{/yellow-fg}  {white-fg}Quit application{/white-fg}",
+      "  {yellow-fg}Ctrl+L {/yellow-fg}         {white-fg}Clear log panel{/white-fg}",
+      "  {yellow-fg}Tab    {/yellow-fg}         {white-fg}Toggle focus: input ↔ link list{/white-fg}",
+      "  {yellow-fg}↑ / ↓  {/yellow-fg}         {white-fg}Navigate download links{/white-fg}",
+      "  {yellow-fg}F1 / Enter{/yellow-fg}      {white-fg}Start download{/white-fg}",
+      "",
+    ].join("\n"));
+
+    blessed.box({
+      parent: overlay,
+      bottom: 0, left: 0, width: "100%", height: 1,
+      style: { fg: "black", bg: "yellow" },
+      tags: true,
+      content: "  {bold}Press any key or Esc to close{/bold}"
+    });
+
+    const close = () => {
+      overlay.destroy();
+      this.inputBox.focus();
+      scr.render();
+    };
+
+    overlay.key(["escape", "enter", "space", "C-h", "q"], close);
+    overlay.focus();
+    scr.render();
   }
 
   _quit() {
-    this._log("{yellow-fg}── Shutting down... ───────────────────────────────{/yellow-fg}");
-    this._setStatus("HALTING", "red");
     this._timers.forEach(t => clearInterval(t));
-    setTimeout(() => process.exit(0), 600);
-  }
 
-  async _download(url) {
-    if (this.state.processing) {
-      this._log("{yellow-fg}⚠ Already processing — please wait!{/yellow-fg}");
-      return;
-    }
+    this.screen.destroy();
 
-    this.state.processing   = true;
-    this.state.result       = null;
-    this.state.selectedLink = 0;
-    this._setProgress(0);
-    this._setStatus("PROCESSING", "yellow");
-
-    this._log("{yellow-fg}═══════════════════════════════════════════════════{/yellow-fg}");
-    this._log(`{white-fg}TARGET  ${url.substring(0, 54)}${url.length > 54 ? "…" : ""}{/white-fg}`);
-
-    try {
-      // Step 1: token
-      this._setProgress(10);
-      this._log("{white-fg}[1/4] Requesting BIOS token...{/white-fg}");
-      const home = await openHome();
-      this._log(`{green-fg}[OK]  Token: ${home.token.substring(0, 26)}…{/green-fg}`);
-      this._setProgress(25);
-
-      // Step 2: submit
-      this._log("{white-fg}[2/4] Submitting to SnapTik API...{/white-fg}");
-      const post = await submitVideo(url, home.token);
-      this._log(`{green-fg}[OK]  Server: HTTP ${post.status}  (${post.body.length} bytes){/green-fg}`);
-      this._setProgress(50);
-
-      // Step 3: decode
-      this._log("{white-fg}[3/4] Decoding obfuscated response...{/white-fg}");
-      const decoded = decodeObfuscatedResponse(post.body);
-      this._log(`{green-fg}[OK]  Decoded: ${decoded.length} chars{/green-fg}`);
-      this._setProgress(75);
-
-      // Step 4: extract
-      this._log("{white-fg}[4/4] Parsing download links...{/white-fg}");
-      const result = await extractResult(decoded);
-      this.state.result = result;
-      this._setProgress(90);
-
-      // Optional render
-      let render = null;
-      if (result.render_token) {
-        this._log("{white-fg}[RND] Async render token found — polling...{/white-fg}");
-        render = await renderVideo(result.render_token);
-        if (render?.download_url)
-          this._log("{green-fg}[OK]  Render complete!{/green-fg}");
-      }
-
-      this._setProgress(100);
-      this._displayResult(result, render);
-
-      const n = result.links?.length ?? 0;
-      this._log(`{green-fg}[DONE] ${n} link(s) ready  ──  use ↑↓ to select, F2 to copy{/green-fg}`);
-      this._log("{green-fg}═══════════════════════════════════════════════════{/green-fg}");
-      this._setStatus("COMPLETE", "green");
-
-    } catch (err) {
-      this._setProgress(0);
-      this._log(`{red-fg}[ERR] ${err.message}{/red-fg}`);
-      this._log("{red-fg}═══════════════════════════════════════════════════{/red-fg}");
-      this._setStatus("FAILED!", "red");
-      this.resultBox.setContent(
-        `\n {red-fg}ERROR:{/red-fg}\n\n ${err.message}\n\n` +
-        " {yellow-fg}Press F3 to reset and try again.{/yellow-fg}"
-      );
-    } finally {
-      this.state.processing = false;
-      this.screen.render();
-    }
-  }
-
-  _displayResult(result, render) {
-    const lines = [];
-
-    if (result.title) {
-      lines.push(`{yellow-fg}Title :{/yellow-fg} {white-fg}${result.title}{/white-fg}`);
-    }
-    if (result.author) {
-      lines.push(`{yellow-fg}Author:{/yellow-fg} {white-fg}${result.author}{/white-fg}`);
-    }
-
-    lines.push("");
-    lines.push("{green-fg}─── Download Links ──────────────────────{/green-fg}");
-    lines.push("");
-
-    if (result.links?.length > 0) {
-      result.links.forEach((link, i) => {
-        const sel = i === this.state.selectedLink;
-        // selected row: inverted
-        if (sel) {
-          lines.push(`{black-fg}{green-bg} ▶ [${i + 1}] ${link.text.padEnd(28)} {/green-bg}{/black-fg}`);
-        } else {
-          lines.push(`   {yellow-fg}[${i + 1}]{/yellow-fg} {white-fg}${link.text}{/white-fg}`);
-        }
-
-        const shortUrl = link.url.length > 36
-          ? link.url.substring(0, 36) + "…"
-          : link.url;
-        lines.push(`   {green-fg}${shortUrl}{/green-fg}`);
-        lines.push("");
-      });
-
-      lines.push("{white-fg}↑↓ navigate   F2 copy URL{/white-fg}");
-    } else {
-      lines.push("  {yellow-fg}No links found in response.{/yellow-fg}");
-    }
-
-    if (render?.download_url) {
-      lines.push("");
-      lines.push("{green-fg}─── Render Output ───────────────────────{/green-fg}");
-      const ru = render.download_url;
-      lines.push(`{green-fg}${ru.length > 36 ? ru.substring(0, 36) + "…" : ru}{/green-fg}`);
-    }
-
-    this.resultBox.setContent(" " + lines.join("\n "));
-    this.screen.render();
+    console.log("\x1b[32m");
+    console.log("  ┌─────────────────────────────────────────┐");
+    console.log("  │   TikTok Downloader    │");
+    console.log("  │       By Nexa Dev      │");
+    console.log("  └─────────────────────────────────────────┘");
+    console.log("\x1b[0m");
+    process.exit(0);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-//  BOOT
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// ── entry point ───────────────────────────────────────────────────────────────
 new RetroTerminalDownloader();
