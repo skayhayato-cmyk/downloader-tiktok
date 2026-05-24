@@ -9,7 +9,7 @@
  * ╚══════════════════════════════════════════════════════════════════════════════╝
  * 
  *  Controls:
- *    Ctrl+A  → Copy URL to clipboard
+ *    Ctrl+S  → Copy URL to clipboard        ← CHANGED from Ctrl+A
  *    Ctrl+B  → Download video to /storage/emulated/0/
  *    Ctrl+R  → Reset form
  *    Ctrl+C  → Quit application
@@ -34,6 +34,53 @@ import {
   extractResult,
   renderVideo
 } from "./tiktok-downloader.js";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  COLOR PALETTE  (semua didefinisikan di sini supaya mudah diganti)
+//  blessed hanya support: black, red, green, yellow, blue, magenta, cyan, white
+//  + bright variants: bright<Color> atau light<Color>
+// ═══════════════════════════════════════════════════════════════════════════════
+const C = {
+  // Backgrounds
+  bgMain:       "black",        // latar utama → hitam pekat, kontras tinggi
+  bgDialog:     "black",        // dialog box
+  bgInput:      "black",        // input field bg
+  bgInputFocus: "black",        // input saat focused
+  bgButton:     "black",        // tombol normal
+  bgButtonFocus:"cyan",         // tombol saat focused → cyan mencolok
+  bgBar:        "blue",         // progress bar fill
+  bgLogBox:     "black",
+  bgResultBox:  "black",
+  bgTitleBar:   "black",
+  bgFooter:     "cyan",         // footer bar → cyan supaya menonjol
+  bgAbout:      "black",
+
+  // Foregrounds
+  fgMain:       "cyan",         // teks utama → cyan
+  fgBorder:     "cyan",         // semua border → cyan
+  fgTitle:      "yellow",       // judul → kuning terang
+  fgLabel:      "green",        // label (Progress:, Log:, Links:) → hijau
+  fgInput:      "white",        // teks dalam input
+  fgStatus:     "yellow",       // teks status kanan atas
+  fgLog:        "white",        // teks log → putih
+  fgResult:     "cyan",         // teks result
+  fgButton:     "cyan",         // teks tombol normal
+  fgButtonFocus:"black",        // teks tombol saat focused
+  fgFooter:     "black",        // teks footer
+  fgAbout:      "white",
+  fgSep:        "cyan",         // garis separator
+  fgScrollbar:  "cyan",
+  fgProgress:   "cyan",         // progress bar fill
+
+  // Accents (dipakai lewat {tag} di content)
+  tagOk:        "green-fg",     // [OK]
+  tagWarn:      "yellow-fg",    // WARNING
+  tagError:     "red-fg",       // ERROR
+  tagInfo:      "cyan-fg",      // [INFO]
+  tagBoot:      "magenta-fg",   // [BOOT]
+  tagDl:        "white-fg",     // [DL]
+  tagDone:      "green-fg",     // [DONE]
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CLIPBOARD HELPER
@@ -136,7 +183,6 @@ async function downloadFile(url, outputPath, onProgress) {
 }
 
 function getDownloadPath(filename) {
-  // Try Android storage first
   const androidPath = "/storage/emulated/0/Download";
   if (fs.existsSync("/storage/emulated/0")) {
     if (!fs.existsSync(androidPath)) {
@@ -146,8 +192,6 @@ function getDownloadPath(filename) {
       return path.join(androidPath, filename);
     }
   }
-
-  // Fallback to home/Downloads
   const homePath = path.join(os.homedir(), "Downloads");
   if (!fs.existsSync(homePath)) {
     try { fs.mkdirSync(homePath, { recursive: true }); } catch {}
@@ -169,7 +213,7 @@ class RetroTikTokDownloader {
         artificial: true,
         shape: "underline",
         blink: true,
-        color: "white"
+        color: "cyan"           // cursor warna cyan
       }
     });
 
@@ -187,17 +231,17 @@ class RetroTikTokDownloader {
   initUI() {
     const screen = this.screen;
 
-    // ─── Blue background (classic DOS/BIOS style) ───
+    // ─── Background utama ───────────────────────────────────────────
     this.bg = blessed.box({
       parent: screen,
       top: 0,
       left: 0,
       width: "100%",
       height: "100%",
-      style: { bg: "blue" }
+      style: { bg: C.bgMain }
     });
 
-    // ─── Shadow effect ───
+    // ─── Shadow ─────────────────────────────────────────────────────
     this.shadow = blessed.box({
       parent: this.bg,
       top: 1,
@@ -207,18 +251,21 @@ class RetroTikTokDownloader {
       style: { bg: "black" }
     });
 
-    // ─── Main dialog box ───
+    // ─── Dialog utama ────────────────────────────────────────────────
     this.dialog = blessed.box({
       parent: this.bg,
       top: 0,
       left: 1,
       width: "100%-4",
       height: "100%-3",
-      border: { type: "line", fg: "white" },
-      style: { bg: "blue", border: { fg: "white" } }
+      border: { type: "line", fg: C.fgBorder },
+      style: {
+        bg: C.bgDialog,
+        border: { fg: C.fgBorder }
+      }
     });
 
-    // ─── Title bar ───
+    // ─── Title bar ───────────────────────────────────────────────────
     this.titleBox = blessed.box({
       parent: this.dialog,
       top: 0,
@@ -226,9 +273,9 @@ class RetroTikTokDownloader {
       width: "100%",
       height: 1,
       align: "center",
-      style: { fg: "white", bg: "blue" },
+      style: { fg: C.fgTitle, bg: C.bgTitleBar },
       tags: true,
-      content: "{bold} TikTok Downloader v3.0 {/bold}"
+      content: `{bold}{yellow-fg}▓▒░ TikTok Downloader v3.0 ░▒▓{/yellow-fg}{/bold}`
     });
 
     this.sep1 = blessed.line({
@@ -237,51 +284,56 @@ class RetroTikTokDownloader {
       left: 0,
       width: "100%",
       orientation: "horizontal",
-      style: { fg: "white", bg: "blue" }
+      style: { fg: C.fgSep, bg: C.bgDialog }
     });
 
-    // ─── URL Input ───
+    // ─── URL Label ───────────────────────────────────────────────────
     this.urlLabel = blessed.box({
       parent: this.dialog,
       top: 3,
       left: 2,
       width: "100%-4",
       height: 2,
-      style: { fg: "white", bg: "blue" },
+      style: { fg: C.fgLabel, bg: C.bgDialog },
       tags: true,
-      content: "Enter TikTok URL:\n(leave blank to exit)"
+      content: `{green-fg}{bold}► Enter TikTok URL:{/bold}{/green-fg}\n{white-fg}  (leave blank to exit){/white-fg}`
     });
 
+    // ─── Input box ───────────────────────────────────────────────────
     this.inputBox = blessed.textbox({
       parent: this.dialog,
       top: 5,
       left: 2,
       width: "100%-4",
       height: 3,
-      border: { type: "line", fg: "white" },
+      border: { type: "line", fg: C.fgBorder },
       style: {
-        fg: "black",
-        bg: "white",
-        border: { fg: "white" },
-        focus: { border: { fg: "yellow" }, bg: "cyan" }
+        fg: C.fgInput,
+        bg: C.bgInput,
+        border: { fg: C.fgBorder },
+        focus: {
+          bg: C.bgInputFocus,
+          border: { fg: "yellow" }   // border kuning saat focused
+        }
       },
       inputOnFocus: true,
       value: "",
       tags: true
     });
 
-    // ─── Progress ───
+    // ─── Progress label ──────────────────────────────────────────────
     this.progressLabel = blessed.box({
       parent: this.dialog,
       top: 9,
       left: 2,
       width: "100%-4",
       height: 1,
-      style: { fg: "yellow", bg: "blue" },
+      style: { fg: C.fgLabel, bg: C.bgDialog },
       tags: true,
-      content: "Progress:"
+      content: `{green-fg}{bold}Progress:{/bold}{/green-fg}`
     });
 
+    // ─── Progress bar ────────────────────────────────────────────────
     this.progressBar = blessed.progressbar({
       parent: this.dialog,
       top: 10,
@@ -290,14 +342,15 @@ class RetroTikTokDownloader {
       height: 1,
       orientation: "horizontal",
       style: {
-        bar: { bg: "white", fg: "blue" },
-        border: { fg: "white" }
+        bar: { bg: C.fgProgress, fg: C.bgMain },   // bar cyan on black
+        border: { fg: C.fgBorder }
       },
       filled: 0,
       pch: "█",
       tags: true
     });
 
+    // ─── Status text ─────────────────────────────────────────────────
     this.statusText = blessed.box({
       parent: this.dialog,
       top: 11,
@@ -305,9 +358,9 @@ class RetroTikTokDownloader {
       width: "100%-4",
       height: 1,
       align: "right",
-      style: { fg: "yellow", bg: "blue" },
+      style: { fg: C.fgStatus, bg: C.bgDialog },
       tags: true,
-      content: "READY"
+      content: `{yellow-fg}{bold}● READY{/bold}{/yellow-fg}`
     });
 
     this.sep2 = blessed.line({
@@ -316,94 +369,106 @@ class RetroTikTokDownloader {
       left: 0,
       width: "100%",
       orientation: "horizontal",
-      style: { fg: "white", bg: "blue" }
+      style: { fg: C.fgSep, bg: C.bgDialog }
     });
 
-    // ─── Log area ───
+    // ─── Log label ───────────────────────────────────────────────────
     this.logLabel = blessed.box({
       parent: this.dialog,
       top: 14,
       left: 2,
-      width: 10,
+      width: 12,
       height: 1,
-      style: { fg: "yellow", bg: "blue" },
+      style: { fg: C.fgLabel, bg: C.bgDialog },
       tags: true,
-      content: "{bold}Log:{/bold}"
+      content: `{green-fg}{bold}[ LOG ]{/bold}{/green-fg}`
     });
 
+    // ─── Log box ─────────────────────────────────────────────────────
     this.logBox = blessed.log({
       parent: this.dialog,
       top: 15,
       left: 2,
       width: "55%",
       height: "100%-20",
-      border: { type: "line", fg: "white" },
+      border: { type: "line", fg: C.fgBorder },
       style: {
-        fg: "white",
-        bg: "blue",
-        border: { fg: "white" },
-        scrollbar: { bg: "white" }
+        fg: C.fgLog,
+        bg: C.bgLogBox,
+        border: { fg: C.fgBorder },
+        scrollbar: { bg: C.fgScrollbar }
       },
       scrollable: true,
       alwaysScroll: true,
       tags: true,
-      scrollbar: { ch: "▒", style: { bg: "white", fg: "blue" } }
+      scrollbar: { ch: "▒", style: { bg: C.fgScrollbar, fg: C.bgMain } }
     });
 
-    // ─── Result area ───
+    // ─── Result label ─────────────────────────────────────────────────
     this.resultLabel = blessed.box({
       parent: this.dialog,
       top: 14,
       left: "55%+1",
-      width: 12,
+      width: 14,
       height: 1,
-      style: { fg: "yellow", bg: "blue" },
+      style: { fg: C.fgLabel, bg: C.bgDialog },
       tags: true,
-      content: "{bold}Links:{/bold}"
+      content: `{green-fg}{bold}[ LINKS ]{/bold}{/green-fg}`
     });
 
+    // ─── Result box ───────────────────────────────────────────────────
     this.resultBox = blessed.box({
       parent: this.dialog,
       top: 15,
       left: "55%+1",
       width: "45%-3",
       height: "100%-20",
-      border: { type: "line", fg: "white" },
+      border: { type: "line", fg: C.fgBorder },
       style: {
-        fg: "white",
-        bg: "blue",
-        border: { fg: "white" },
-        scrollbar: { bg: "white" }
+        fg: C.fgResult,
+        bg: C.bgResultBox,
+        border: { fg: C.fgBorder },
+        scrollbar: { bg: C.fgScrollbar }
       },
       scrollable: true,
       alwaysScroll: true,
       tags: true,
-      scrollbar: { ch: "▒", style: { bg: "white", fg: "blue" } }
+      scrollbar: { ch: "▒", style: { bg: C.fgScrollbar, fg: C.bgMain } }
     });
 
-    // ─── Button bar ───
+    // ─── Button bar ───────────────────────────────────────────────────
     this.buttonBar = blessed.box({
       parent: this.dialog,
       top: "100%-4",
       left: 0,
       width: "100%",
       height: 3,
-      border: { type: "line", fg: "white" },
-      style: { fg: "white", bg: "blue", border: { fg: "white" } },
+      border: { type: "line", fg: C.fgBorder },
+      style: {
+        fg: C.fgMain,
+        bg: C.bgDialog,
+        border: { fg: C.fgBorder }
+      },
       tags: true,
       align: "center",
       valign: "middle"
     });
 
+    const btnStyle = {
+      fg: C.fgButton,
+      bg: C.bgButton,
+      focus: { bg: C.bgButtonFocus, fg: C.fgButtonFocus }
+    };
+
     this.btnDownload = blessed.button({
       parent: this.buttonBar,
       top: 1,
-      left: "15%",
-      width: 12,
+      left: "5%",
+      width: 14,
       height: 1,
-      content: "{bold}< Download >{/bold}",
+      content: "{bold}{cyan-fg}[Download]{/cyan-fg}{/bold}",
       align: "center",
-      style: { fg: "white", bg: "blue", focus: { bg: "white", fg: "black" } },
+      style: btnStyle,
       tags: true,
       mouse: true,
       clickable: true
@@ -412,12 +477,12 @@ class RetroTikTokDownloader {
     this.btnCopy = blessed.button({
       parent: this.buttonBar,
       top: 1,
-      left: "38%",
-      width: 12,
+      left: "29%",
+      width: 14,
       height: 1,
-      content: "{bold}< Copy URL >{/bold}",
+      content: "{bold}{cyan-fg}[Copy URL]{/cyan-fg}{/bold}",
       align: "center",
-      style: { fg: "white", bg: "blue", focus: { bg: "white", fg: "black" } },
+      style: btnStyle,
       tags: true,
       mouse: true,
       clickable: true
@@ -426,12 +491,12 @@ class RetroTikTokDownloader {
     this.btnSave = blessed.button({
       parent: this.buttonBar,
       top: 1,
-      left: "61%",
-      width: 12,
+      left: "54%",
+      width: 14,
       height: 1,
-      content: "{bold}< Save File >{/bold}",
+      content: "{bold}{cyan-fg}[Save File]{/cyan-fg}{/bold}",
       align: "center",
-      style: { fg: "white", bg: "blue", focus: { bg: "white", fg: "black" } },
+      style: btnStyle,
       tags: true,
       mouse: true,
       clickable: true
@@ -440,43 +505,46 @@ class RetroTikTokDownloader {
     this.btnQuit = blessed.button({
       parent: this.buttonBar,
       top: 1,
-      left: "84%",
-      width: 10,
+      left: "79%",
+      width: 12,
       height: 1,
-      content: "{bold}< Quit >{/bold}",
+      content: "{bold}{red-fg}[Quit]{/red-fg}{/bold}",
       align: "center",
-      style: { fg: "white", bg: "blue", focus: { bg: "white", fg: "black" } },
+      style: {
+        fg: "red",
+        bg: C.bgButton,
+        focus: { bg: "red", fg: "white" }
+      },
       tags: true,
       mouse: true,
       clickable: true
     });
 
-    // ─── Footer ───
+    // ─── Footer ───────────────────────────────────────────────────────
     this.footer = blessed.box({
       parent: screen,
       bottom: 0,
       left: 0,
       width: "100%",
       height: 1,
-      style: { fg: "black", bg: "white" },
+      style: { fg: C.fgFooter, bg: C.bgFooter },
       tags: true,
-      content: "  Ctrl+A=Copy  Ctrl+B=Save  Ctrl+R=Reset  Ctrl+C=Quit  Alt+N=About  "
+      content: " {bold}Ctrl+S{/bold}=Copy  {bold}Ctrl+B{/bold}=Save  {bold}Ctrl+R{/bold}=Reset  {bold}Ctrl+C{/bold}=Quit  {bold}Alt+N{/bold}=About  {bold}↑↓{/bold}=SelectLink "
     });
 
     this.inputBox.focus();
   }
 
-  // ─── About Dialog ───
+  // ─── About Dialog ──────────────────────────────────────────────────
   showAbout() {
     if (this.aboutVisible) return;
     this.aboutVisible = true;
 
-    const dialogWidth = 50;
-    const dialogHeight = 16;
+    const dialogWidth = 52;
+    const dialogHeight = 18;
     const left = Math.floor((this.screen.width - dialogWidth) / 2);
     const top = Math.floor((this.screen.height - dialogHeight) / 2);
 
-    // Shadow
     this.aboutShadow = blessed.box({
       parent: this.screen,
       top: top + 1,
@@ -486,19 +554,17 @@ class RetroTikTokDownloader {
       style: { bg: "black" }
     });
 
-    // Main about box
     this.aboutBox = blessed.box({
       parent: this.screen,
       top: top,
       left: left,
       width: dialogWidth,
       height: dialogHeight,
-      border: { type: "line", fg: "white" },
-      style: { bg: "blue", border: { fg: "white" } },
+      border: { type: "line", fg: "yellow" },
+      style: { bg: C.bgAbout, border: { fg: "yellow" } },
       tags: true
     });
 
-    // Title
     blessed.box({
       parent: this.aboutBox,
       top: 0,
@@ -506,9 +572,9 @@ class RetroTikTokDownloader {
       width: "100%",
       height: 1,
       align: "center",
-      style: { fg: "white", bg: "blue" },
+      style: { fg: "yellow", bg: C.bgAbout },
       tags: true,
-      content: "{bold} About This Program {/bold}"
+      content: "{bold}{yellow-fg}▒ About This Program ▒{/yellow-fg}{/bold}"
     });
 
     blessed.line({
@@ -517,29 +583,28 @@ class RetroTikTokDownloader {
       left: 0,
       width: "100%",
       orientation: "horizontal",
-      style: { fg: "white", bg: "blue" }
+      style: { fg: "yellow", bg: C.bgAbout }
     });
 
-    // Content
     blessed.box({
       parent: this.aboutBox,
       top: 3,
       left: 2,
       width: "100%-4",
       height: "100%-6",
-      style: { fg: "white", bg: "blue" },
+      style: { fg: C.fgAbout, bg: C.bgAbout },
       tags: true,
       content:
-        "{center}{bold}TikTok Downloader{/bold}{/center}\n" +
-        "{center}Version 3.0 - Retro Edition{/center}\n\n" +
-        "  {bold}Project:{/bold}    TikTok Downloader\n" +
-        "  {bold}Creator:{/bold}    NexaDev\n" +
-        "  {bold}Scraper:{/bold}    Ditzzx\n\n" +
-        "  {bold}Features:{/bold}\n" +
-        "    • SnapTik API Integration\n" +
-        "    • Obfuscated Response Decoder\n" +
-        "    • Direct File Download\n" +
-        "    • Retro Computer UI\n\n" +
+        "{center}{bold}{cyan-fg}TikTok Downloader{/cyan-fg}{/bold}{/center}\n" +
+        "{center}{white-fg}Version 3.0 - Retro Edition{/white-fg}{/center}\n\n" +
+        "  {green-fg}{bold}Project:{/bold}{/green-fg}    TikTok Downloader\n" +
+        "  {green-fg}{bold}Creator:{/bold}{/green-fg}    NexaDev\n" +
+        "  {green-fg}{bold}Scraper:{/bold}{/green-fg}    Ditzzx\n\n" +
+        "  {green-fg}{bold}Features:{/bold}{/green-fg}\n" +
+        "    {cyan-fg}•{/cyan-fg} SnapTik API Integration\n" +
+        "    {cyan-fg}•{/cyan-fg} Obfuscated Response Decoder\n" +
+        "    {cyan-fg}•{/cyan-fg} Direct File Download\n" +
+        "    {cyan-fg}•{/cyan-fg} Retro Computer UI\n\n" +
         "{center}{yellow-fg}Press Alt+M to close{/yellow-fg}{/center}"
     });
 
@@ -557,8 +622,8 @@ class RetroTikTokDownloader {
   }
 
   bindKeys() {
-    // ─── Ctrl+A: Copy URL ───
-    this.screen.key(["C-a"], async () => {
+    // ─── Ctrl+S: Copy URL (CHANGED from Ctrl+A) ───
+    this.screen.key(["C-s"], async () => {
       await this.doCopy();
     });
 
@@ -591,7 +656,7 @@ class RetroTikTokDownloader {
     this.inputBox.key(["enter"], async () => {
       const url = this.inputBox.getValue().trim();
       if (!url) {
-        this.log("{yellow-fg}WARNING:{/yellow-fg} URL is empty!");
+        this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} URL is empty!`);
         return;
       }
       await this.download(url);
@@ -605,24 +670,24 @@ class RetroTikTokDownloader {
       this.currentFocus = focusOrder[nextIdx];
 
       switch (this.currentFocus) {
-        case "input": this.inputBox.focus(); break;
+        case "input":    this.inputBox.focus();    break;
         case "download": this.btnDownload.focus(); break;
-        case "copy": this.btnCopy.focus(); break;
-        case "save": this.btnSave.focus(); break;
-        case "quit": this.btnQuit.focus(); break;
+        case "copy":     this.btnCopy.focus();     break;
+        case "save":     this.btnSave.focus();     break;
+        case "quit":     this.btnQuit.focus();     break;
       }
     });
 
     // ─── Button clicks ───
     this.btnDownload.on("press", async () => {
       const url = this.inputBox.getValue().trim();
-      if (!url) { this.log("{yellow-fg}WARNING:{/yellow-fg} URL is empty!"); return; }
+      if (!url) { this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} URL is empty!`); return; }
       await this.download(url);
     });
 
-    this.btnCopy.on("press", async () => { await this.doCopy(); });
-    this.btnSave.on("press", async () => { await this.doDownloadFile(); });
-    this.btnQuit.on("press", () => { this.doQuit(); });
+    this.btnCopy.on("press",  async () => { await this.doCopy(); });
+    this.btnSave.on("press",  async () => { await this.doDownloadFile(); });
+    this.btnQuit.on("press",  ()       => { this.doQuit(); });
 
     // ─── Arrow keys ───
     this.screen.key(["up"], () => {
@@ -645,28 +710,28 @@ class RetroTikTokDownloader {
 
   async doCopy() {
     if (this.downloadResult?.links?.length > 0) {
-      const url = this.downloadResult.links[this.selectedLinkIndex]?.url || 
+      const url = this.downloadResult.links[this.selectedLinkIndex]?.url ||
                   this.downloadResult.links[0].url;
       try {
         await copyToClipboard(url);
-        this.log("{white-fg}{bold}OK:{/bold}{/white-fg} URL copied to clipboard!");
-        this.setStatus("COPIED");
+        this.log(`{green-fg}✔ OK:{/green-fg} URL copied to clipboard!`);
+        this.setStatus("COPIED ✔");
       } catch (err) {
-        this.log(`{yellow-fg}WARNING:{/yellow-fg} ${err.message}`);
-        this.setStatus("COPY FAILED");
+        this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} ${err.message}`);
+        this.setStatus("COPY FAILED ✘");
       }
     } else {
-      this.log("{yellow-fg}WARNING:{/yellow-fg} No URL to copy!");
+      this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} No URL to copy!`);
     }
   }
 
   async doDownloadFile() {
     if (!this.downloadResult?.links?.length > 0) {
-      this.log("{yellow-fg}WARNING:{/yellow-fg} No URL to download! Process a URL first.");
+      this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} No URL to download! Process a URL first.`);
       return;
     }
 
-    const url = this.downloadResult.links[this.selectedLinkIndex]?.url || 
+    const url = this.downloadResult.links[this.selectedLinkIndex]?.url ||
                 this.downloadResult.links[0].url;
 
     let filename = "tiktok-video.mp4";
@@ -679,8 +744,8 @@ class RetroTikTokDownloader {
 
     const outputPath = getDownloadPath(filename);
 
-    this.log(`{white-fg}[DL] Starting download...{/white-fg}`);
-    this.setStatus("DOWNLOADING");
+    this.log(`{cyan-fg}[DL] Starting download...{/cyan-fg}`);
+    this.setStatus("DOWNLOADING...");
 
     try {
       await downloadFile(url, outputPath, (percent) => {
@@ -688,30 +753,41 @@ class RetroTikTokDownloader {
         this.setStatus(`DOWNLOADING ${percent}%`);
       });
 
-      this.log(`{white-fg}{bold}[OK]{/bold}{/white-fg} Saved to: ${outputPath}`);
-      this.setStatus("SAVED");
+      this.log(`{green-fg}✔ [OK]{/green-fg} Saved to: {white-fg}${outputPath}{/white-fg}`);
+      this.setStatus("SAVED ✔");
       this.setProgress(100);
     } catch (err) {
-      this.log(`{yellow-fg}ERROR:{/yellow-fg} Download failed: ${err.message}`);
-      this.setStatus("DOWNLOAD FAILED");
+      this.log(`{red-fg}✘ ERROR:{/red-fg} Download failed: ${err.message}`);
+      this.setStatus("DOWNLOAD FAILED ✘");
       this.setProgress(0);
     }
   }
 
   doQuit() {
-    this.log("{white-fg}Shutting down...{/white-fg}");
-    this.setStatus("EXITING");
+    this.log(`{white-fg}Shutting down...{/white-fg}`);
+    this.setStatus("EXITING...");
     setTimeout(() => process.exit(0), 500);
   }
 
   log(message) {
     const timestamp = new Date().toLocaleTimeString("id-ID", { hour12: false });
-    this.logBox.log(`[${timestamp}] ${message}`);
+    this.logBox.log(`{white-fg}[${timestamp}]{/white-fg} ${message}`);
     this.screen.render();
   }
 
   setStatus(status) {
-    this.statusText.setContent(`{bold}${status}{/bold}`);
+    // Warna status otomatis berdasarkan keyword
+    let colored = status;
+    if (status.includes("READY"))       colored = `{yellow-fg}{bold}● ${status}{/bold}{/yellow-fg}`;
+    else if (status.includes("COMPLETE") || status.includes("SAVED") || status.includes("COPIED"))
+                                         colored = `{green-fg}{bold}● ${status}{/bold}{/green-fg}`;
+    else if (status.includes("FAILED") || status.includes("ERROR"))
+                                         colored = `{red-fg}{bold}● ${status}{/bold}{/red-fg}`;
+    else if (status.includes("PROCESSING") || status.includes("DOWNLOADING"))
+                                         colored = `{cyan-fg}{bold}● ${status}{/bold}{/cyan-fg}`;
+    else                                 colored = `{white-fg}{bold}● ${status}{/bold}{/white-fg}`;
+
+    this.statusText.setContent(colored);
     this.screen.render();
   }
 
@@ -722,11 +798,11 @@ class RetroTikTokDownloader {
 
   reset() {
     this.inputBox.setValue("");
-    this.resultBox.setContent("{center}No results yet{/center}");
+    this.resultBox.setContent(`{cyan-fg}{center}── No results yet ──{/center}{/cyan-fg}`);
     this.downloadResult = null;
     this.selectedLinkIndex = 0;
     this.setProgress(0);
-    this.log("{white-fg}Form reset{/white-fg}");
+    this.log(`{white-fg}Form reset{/white-fg}`);
     this.setStatus("READY");
     this.inputBox.focus();
     this.currentFocus = "input";
@@ -735,7 +811,7 @@ class RetroTikTokDownloader {
 
   async download(url) {
     if (this.isProcessing) {
-      this.log("{yellow-fg}WARNING:{/yellow-fg} Already processing!");
+      this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} Already processing!`);
       return;
     }
 
@@ -745,50 +821,50 @@ class RetroTikTokDownloader {
     this.selectedLinkIndex = 0;
     this.setProgress(0);
     this.setStatus("PROCESSING");
-    this.log(`{white-fg}Target: ${url.substring(0, 50)}...{/white-fg}`);
+    this.log(`{cyan-fg}► Target:{/cyan-fg} ${url.substring(0, 50)}...`);
 
     try {
       this.setProgress(10);
-      this.log("{white-fg}[1/4] Fetching token...{/white-fg}");
+      this.log(`{cyan-fg}[1/4]{/cyan-fg} Fetching token...`);
       const home = await openHome();
-      this.log(`{white-fg}[OK] Token: ${home.token.substring(0, 25)}...{/white-fg}`);
+      this.log(`{green-fg}✔ [OK]{/green-fg} Token: ${home.token.substring(0, 25)}...`);
       this.setProgress(25);
 
-      this.log("{white-fg}[2/4] Submitting to SnapTik...{/white-fg}");
+      this.log(`{cyan-fg}[2/4]{/cyan-fg} Submitting to SnapTik...`);
       const post = await submitVideo(url, home.token);
-      this.log(`{white-fg}[OK] HTTP ${post.status}{/white-fg}`);
+      this.log(`{green-fg}✔ [OK]{/green-fg} HTTP {white-fg}${post.status}{/white-fg}`);
       this.setProgress(50);
 
-      this.log("{white-fg}[3/4] Decoding obfuscated response...{/white-fg}");
+      this.log(`{cyan-fg}[3/4]{/cyan-fg} Decoding obfuscated response...`);
       const decoded = decodeObfuscatedResponse(post.body);
-      this.log(`{white-fg}[OK] Decoded: ${decoded.length} chars{/white-fg}`);
+      this.log(`{green-fg}✔ [OK]{/green-fg} Decoded: {white-fg}${decoded.length} chars{/white-fg}`);
       this.setProgress(75);
 
-      this.log("{white-fg}[4/4] Extracting download links...{/white-fg}");
+      this.log(`{cyan-fg}[4/4]{/cyan-fg} Extracting download links...`);
       const result = await extractResult(decoded);
       this.downloadResult = result;
       this.setProgress(90);
 
       let render = null;
       if (result.render_token) {
-        this.log("{white-fg}[RND] Async render started...{/white-fg}");
+        this.log(`{cyan-fg}[RND]{/cyan-fg} Async render started...`);
         render = await renderVideo(result.render_token);
         if (render?.download_url) {
-          this.log("{white-fg}[OK] Render complete!{/white-fg}");
+          this.log(`{green-fg}✔ [OK]{/green-fg} Render complete!`);
         }
       }
 
       this.setProgress(100);
       this.displayResult(result, render);
-      this.log("{white-fg}{bold}[DONE] Download ready!{/bold}{/white-fg}");
+      this.log(`{green-fg}✔ {bold}[DONE]{/bold} Download ready!{/green-fg}`);
       this.setStatus("COMPLETE");
 
     } catch (err) {
       this.setProgress(0);
-      this.log(`{yellow-fg}ERROR: ${err.message}{/yellow-fg}`);
+      this.log(`{red-fg}✘ ERROR: ${err.message}{/red-fg}`);
       this.setStatus("FAILED");
       this.resultBox.setContent(
-        `{yellow-fg}{bold}ERROR:{/bold}{/yellow-fg}\n${err.message}`
+        `{red-fg}{bold}✘ ERROR:{/bold}{/red-fg}\n{white-fg}${err.message}{/white-fg}`
       );
     } finally {
       this.isProcessing = false;
@@ -800,31 +876,35 @@ class RetroTikTokDownloader {
     let content = "";
 
     if (result.title) {
-      content += `{bold}Title:{/bold} ${result.title}\n`;
+      content += `{yellow-fg}{bold}Title:{/bold}{/yellow-fg}  {white-fg}${result.title}{/white-fg}\n`;
     }
     if (result.author) {
-      content += `{bold}Author:{/bold} ${result.author}\n`;
+      content += `{yellow-fg}{bold}Author:{/bold}{/yellow-fg} {white-fg}${result.author}{/white-fg}\n`;
     }
     if (result.thumbnail) {
-      content += `{bold}Thumb:{/bold} ${result.thumbnail.substring(0, 35)}...\n`;
+      content += `{yellow-fg}{bold}Thumb:{/bold}{/yellow-fg}  {white-fg}${result.thumbnail.substring(0, 32)}...{/white-fg}\n`;
     }
 
-    content += `\n{bold}Download Links:{/bold}\n`;
+    content += `\n{green-fg}{bold}Download Links:{/bold}{/green-fg}\n`;
 
     if (result.links && result.links.length > 0) {
       result.links.forEach((link, i) => {
-        const marker = i === this.selectedLinkIndex ? 
-          "{black-fg}{white-bg}▶{/white-bg}{/black-fg}" : " ";
-        content += `${marker} ${i + 1}. ${link.text}\n`;
-        content += `   ${link.url}\n\n`;
+        const isSelected = i === this.selectedLinkIndex;
+        const marker = isSelected
+          ? `{black-fg}{cyan-bg} ▶ {/cyan-bg}{/black-fg}`
+          : `   `;
+        const numColor = isSelected ? `{cyan-fg}{bold}` : `{white-fg}`;
+        const numEnd   = isSelected ? `{/bold}{/cyan-fg}` : `{/white-fg}`;
+        content += `${marker} ${numColor}${i + 1}. ${link.text}${numEnd}\n`;
+        content += `       {white-fg}${link.url.substring(0, 35)}...{/white-fg}\n\n`;
       });
-      content += `\n{yellow-fg}Use ↑↓ to select, Ctrl+A to copy, Ctrl+B to save{/yellow-fg}\n`;
+      content += `\n{yellow-fg}↑↓ select  Ctrl+S copy  Ctrl+B save{/yellow-fg}\n`;
     } else {
-      content += "  No links found\n";
+      content += `  {red-fg}No links found{/red-fg}\n`;
     }
 
     if (render?.download_url) {
-      content += `\n{bold}Render:{/bold}\n  ${render.download_url}\n`;
+      content += `\n{green-fg}{bold}Render:{/bold}{/green-fg}\n  {white-fg}${render.download_url}{/white-fg}\n`;
     }
 
     this.resultBox.setContent(content);
@@ -832,9 +912,10 @@ class RetroTikTokDownloader {
   }
 
   start() {
-    this.log("{white-fg}{bold}[BOOT] TikTok Downloader v3.0{/bold}{/white-fg}");
-    this.log("{white-fg}[BOOT] SnapTik API connected{/white-fg}");
-    this.log("{white-fg}[INFO] Paste URL and press Enter{/white-fg}");
+    this.log(`{magenta-fg}[BOOT]{/magenta-fg} {bold}TikTok Downloader v3.0{/bold}`);
+    this.log(`{magenta-fg}[BOOT]{/magenta-fg} SnapTik API connected`);
+    this.log(`{cyan-fg}[INFO]{/cyan-fg} Paste URL and press {bold}Enter{/bold}`);
+    this.log(`{cyan-fg}[INFO]{/cyan-fg} Ctrl+S=Copy  Ctrl+B=Save  Ctrl+R=Reset`);
     this.setStatus("READY");
     this.screen.render();
   }
