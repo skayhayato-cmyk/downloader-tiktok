@@ -18,6 +18,14 @@
  *    Tab      → Cycle focus
  */
 
+// ─── UTF-8 / Unicode fix ─────────────────────────────────────────────────────
+process.env.LANG     = process.env.LANG     || "en_US.UTF-8";
+process.env.LC_ALL   = process.env.LC_ALL   || "en_US.UTF-8";
+process.env.LC_CTYPE = process.env.LC_CTYPE || "en_US.UTF-8";
+if (process.stdout.setDefaultEncoding) process.stdout.setDefaultEncoding("utf8");
+if (process.stderr.setDefaultEncoding) process.stderr.setDefaultEncoding("utf8");
+// ─────────────────────────────────────────────────────────────────────────────
+
 import yt from "@vreden/youtube_scraper";
 import crypto from "crypto";
 import axios from "axios";
@@ -237,6 +245,8 @@ class YouTubeDownloaderTUI {
   constructor() {
     this.screen = blessed.screen({
       smartCSR: true,
+      fullUnicode: true,
+      forceUnicode: true,
       title: "YouTube Downloader - NEXA Suite",
       mouse: true,
       cursor: { artificial: true, shape: "underline", blink: true, color: "red" },

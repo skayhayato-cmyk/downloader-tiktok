@@ -8,7 +8,8 @@
     "nexa-dl": "./index.js"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:utf8": "LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 node index.js"
   },
   "keywords": [
     "tiktok",
