@@ -2,928 +2,459 @@
 
 /**
  * ╔══════════════════════════════════════════════════════════════════════════════╗
- * ║  TikTok Downloader - Retro Computer Edition v3.0                             ║
- * ║  Project: TikTok Downloader                                                  ║
+ * ║  NEXA DOWNLOADER - Retro Terminal Suite v1.0                                 ║
+ * ║  Project: Multi-Platform Downloader                                          ║
  * ║  Created by: NexaDev                                                         ║
- * ║  Scraper by: Ditzzx                                                          ║
  * ╚══════════════════════════════════════════════════════════════════════════════╝
- * 
- *  Controls:
- *    Ctrl+S  → Copy URL to clipboard        ← CHANGED from Ctrl+A
- *    Ctrl+B  → Download video to /storage/emulated/0/
- *    Ctrl+R  → Reset form
- *    Ctrl+C  → Quit application
- *    Alt+N   → About dialog
- *    Alt+M   → Close about dialog
- *    Enter   → Process URL
- *    Tab     → Next field
- *    ↑/↓     → Select link
  */
 
 import blessed from "blessed";
 import { spawn } from "child_process";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import https from "node:https";
+import { fileURLToPath } from "node:url";
 
-import {
-  openHome,
-  submitVideo,
-  decodeObfuscatedResponse,
-  extractResult,
-  renderVideo
-} from "./tiktok-downloader.js";
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  COLOR PALETTE  (semua didefinisikan di sini supaya mudah diganti)
-//  blessed hanya support: black, red, green, yellow, blue, magenta, cyan, white
-//  + bright variants: bright<Color> atau light<Color>
+//  COLOR PALETTE
 // ═══════════════════════════════════════════════════════════════════════════════
 const C = {
-  // Backgrounds
-  bgMain:       "black",        // latar utama → hitam pekat, kontras tinggi
-  bgDialog:     "black",        // dialog box
-  bgInput:      "black",        // input field bg
-  bgInputFocus: "black",        // input saat focused
-  bgButton:     "black",        // tombol normal
-  bgButtonFocus:"cyan",         // tombol saat focused → cyan mencolok
-  bgBar:        "blue",         // progress bar fill
-  bgLogBox:     "black",
-  bgResultBox:  "black",
-  bgTitleBar:   "black",
-  bgFooter:     "cyan",         // footer bar → cyan supaya menonjol
-  bgAbout:      "black",
-
-  // Foregrounds
-  fgMain:       "cyan",         // teks utama → cyan
-  fgBorder:     "cyan",         // semua border → cyan
-  fgTitle:      "yellow",       // judul → kuning terang
-  fgLabel:      "green",        // label (Progress:, Log:, Links:) → hijau
-  fgInput:      "white",        // teks dalam input
-  fgStatus:     "yellow",       // teks status kanan atas
-  fgLog:        "white",        // teks log → putih
-  fgResult:     "cyan",         // teks result
-  fgButton:     "cyan",         // teks tombol normal
-  fgButtonFocus:"black",        // teks tombol saat focused
-  fgFooter:     "black",        // teks footer
-  fgAbout:      "white",
-  fgSep:        "cyan",         // garis separator
-  fgScrollbar:  "cyan",
-  fgProgress:   "cyan",         // progress bar fill
-
-  // Accents (dipakai lewat {tag} di content)
-  tagOk:        "green-fg",     // [OK]
-  tagWarn:      "yellow-fg",    // WARNING
-  tagError:     "red-fg",       // ERROR
-  tagInfo:      "cyan-fg",      // [INFO]
-  tagBoot:      "magenta-fg",   // [BOOT]
-  tagDl:        "white-fg",     // [DL]
-  tagDone:      "green-fg",     // [DONE]
+  bgMain:       "black",
+  bgDialog:     "black",
+  bgButton:     "black",
+  bgButtonFocus:"cyan",
+  fgMain:       "cyan",
+  fgBorder:     "cyan",
+  fgTitle:      "yellow",
+  fgLabel:      "green",
+  fgButton:     "cyan",
+  fgButtonFocus:"black",
+  fgFooter:     "black",
+  bgFooter:     "cyan",
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  CLIPBOARD HELPER
+//  MENU ITEMS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-async function copyToClipboard(text) {
-  const platform = process.platform;
-  const errors = [];
-
-  const tryCommand = (cmd, args, input) => {
-    return new Promise((resolve, reject) => {
-      const proc = spawn(cmd, args);
-      let error = "";
-      proc.stdin.write(input);
-      proc.stdin.end();
-      proc.stderr.on("data", data => { error += data.toString(); });
-      proc.on("error", err => reject(err));
-      proc.on("exit", code => {
-        if (code === 0) resolve(true);
-        else reject(new Error(`${cmd} exited with ${code}: ${error}`));
-      });
-    });
-  };
-
-  if (platform === "darwin") {
-    try { await tryCommand("pbcopy", [], text); return; }
-    catch (e) { errors.push(`pbcopy: ${e.message}`); }
-  } else if (platform === "win32") {
-    try { await tryCommand("clip", [], text); return; }
-    catch (e) { errors.push(`clip: ${e.message}`); }
-  } else {
-    const linuxCommands = [
-      ["wl-copy", []],
-      ["xclip", ["-selection", "clipboard"]],
-      ["xsel", ["--clipboard", "--input"]],
-      ["termux-clipboard-set", []]
-    ];
-    for (const [cmd, args] of linuxCommands) {
-      try { await tryCommand(cmd, args, text); return; }
-      catch (e) { errors.push(`${cmd}: ${e.message}`); }
-    }
-  }
-
-  try {
-    const osc52 = `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`;
-    process.stdout.write(osc52);
-    return;
-  } catch (e) { errors.push(`OSC52: ${e.message}`); }
-
-  try {
-    const tmpFile = path.join(os.tmpdir(), `tiktok-url-${Date.now()}.txt`);
-    fs.writeFileSync(tmpFile, text, "utf8");
-    throw new Error(`Clipboard tools not found. URL saved to: ${tmpFile}`);
-  } catch (e) {
-    if (e.message.includes("saved to")) throw e;
-    errors.push(`tempfile: ${e.message}`);
-  }
-
-  throw new Error(
-    `Clipboard failed. Tried:\n${errors.map(e => "  - " + e).join("\n")}\n\n` +
-    `Install: xclip, xsel, wl-copy (Linux) | pbcopy (Mac) | clip (Windows)`
-  );
-}
+const MENU_ITEMS = [
+  {
+    key: "1",
+    label: "TikTok Downloader",
+    icon: "♪",
+    desc: "Download TikTok videos without watermark",
+    color: "cyan-fg",
+    script: "tiktok-main.js",
+  },
+  {
+    key: "2",
+    label: "Instagram Downloader",
+    icon: "◈",
+    desc: "Download Instagram Reels, Photos & Videos",
+    color: "magenta-fg",
+    script: "ig-download.js",
+  },
+  {
+    key: "3",
+    label: "YouTube Downloader",
+    icon: "▶",
+    desc: "Download YouTube videos & audio (MP3/MP4)",
+    color: "red-fg",
+    script: "yt-download.js",
+  },
+];
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  FILE DOWNLOAD HELPER
+//  ASCII ART LOGO
 // ═══════════════════════════════════════════════════════════════════════════════
-
-async function downloadFile(url, outputPath, onProgress) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(outputPath);
-    https.get(url, { timeout: 60000 }, response => {
-      const total = parseInt(response.headers['content-length'], 10) || 0;
-      let downloaded = 0;
-
-      response.on('data', chunk => {
-        downloaded += chunk.length;
-        file.write(chunk);
-        if (total > 0 && onProgress) {
-          onProgress(Math.round((downloaded / total) * 100));
-        }
-      });
-
-      response.on('end', () => {
-        file.end();
-        resolve(outputPath);
-      });
-
-      response.on('error', err => {
-        file.destroy();
-        fs.unlink(outputPath, () => {});
-        reject(err);
-      });
-    }).on('error', err => {
-      file.destroy();
-      fs.unlink(outputPath, () => {});
-      reject(err);
-    });
-  });
-}
-
-function getDownloadPath(filename) {
-  const androidPath = "/storage/emulated/0/Download";
-  if (fs.existsSync("/storage/emulated/0")) {
-    if (!fs.existsSync(androidPath)) {
-      try { fs.mkdirSync(androidPath, { recursive: true }); } catch {}
-    }
-    if (fs.existsSync(androidPath)) {
-      return path.join(androidPath, filename);
-    }
-  }
-  const homePath = path.join(os.homedir(), "Downloads");
-  if (!fs.existsSync(homePath)) {
-    try { fs.mkdirSync(homePath, { recursive: true }); } catch {}
-  }
-  return path.join(homePath, filename);
-}
+const LOGO = [
+  "███╗   ██╗███████╗██╗  ██╗ █████╗ ",
+  "████╗  ██║██╔════╝╚██╗██╔╝██╔══██╗",
+  "██╔██╗ ██║█████╗   ╚███╔╝ ███████║",
+  "██║╚██╗██║██╔══╝   ██╔██╗ ██╔══██║",
+  "██║ ╚████║███████╗██╔╝ ██╗██║  ██║",
+  "╚═╝  ╚═══╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝",
+  "  ─── D O W N L O A D E R  S U I T E ───",
+];
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  RETRO TUI CLASS
+//  MAIN MENU CLASS
 // ═══════════════════════════════════════════════════════════════════════════════
-
-class RetroTikTokDownloader {
+class NexaMenu {
   constructor() {
     this.screen = blessed.screen({
       smartCSR: true,
-      title: "TikTok Downloader",
+      title: "NEXA Downloader Suite",
       mouse: true,
       cursor: {
         artificial: true,
         shape: "underline",
         blink: true,
-        color: "cyan"           // cursor warna cyan
-      }
+        color: "cyan",
+      },
     });
 
-    this.currentUrl = "";
-    this.isProcessing = false;
-    this.downloadResult = null;
-    this.selectedLinkIndex = 0;
-    this.currentFocus = "input";
-    this.aboutVisible = false;
+    this.selectedIndex = 0;
+    this.childProcess = null;
+    this.inSubApp = false;
 
     this.initUI();
     this.bindKeys();
+    this.startAnimations();
   }
 
   initUI() {
     const screen = this.screen;
 
-    // ─── Background utama ───────────────────────────────────────────
+    // ─── Scanline background effect ─────────────────────────────────
     this.bg = blessed.box({
       parent: screen,
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: "100%",
-      style: { bg: C.bgMain }
+      top: 0, left: 0,
+      width: "100%", height: "100%",
+      style: { bg: C.bgMain },
     });
 
-    // ─── Shadow ─────────────────────────────────────────────────────
+    // ─── Shadow ──────────────────────────────────────────────────────
     this.shadow = blessed.box({
       parent: this.bg,
-      top: 1,
-      left: 2,
-      width: "100%-4",
-      height: "100%-3",
-      style: { bg: "black" }
+      top: 1, left: 2,
+      width: "100%-6", height: "100%-4",
+      style: { bg: "black" },
     });
 
-    // ─── Dialog utama ────────────────────────────────────────────────
+    // ─── Outer border dialog ─────────────────────────────────────────
     this.dialog = blessed.box({
       parent: this.bg,
-      top: 0,
-      left: 1,
-      width: "100%-4",
-      height: "100%-3",
+      top: 0, left: 1,
+      width: "100%-4", height: "100%-3",
       border: { type: "line", fg: C.fgBorder },
       style: {
         bg: C.bgDialog,
-        border: { fg: C.fgBorder }
-      }
+        border: { fg: C.fgBorder },
+      },
+    });
+
+    // ─── Double-line inner decorative border ─────────────────────────
+    this.innerBorder = blessed.box({
+      parent: this.dialog,
+      top: 1, left: 1,
+      width: "100%-2", height: "100%-2",
+      border: { type: "line", fg: "blue" },
+      style: {
+        bg: C.bgDialog,
+        border: { fg: "blue" },
+      },
+    });
+
+    // ─── Corner decorations ──────────────────────────────────────────
+    blessed.box({
+      parent: this.dialog,
+      top: 0, left: 0, width: 3, height: 1,
+      style: { fg: "yellow", bg: C.bgDialog },
+      tags: true,
+      content: "{yellow-fg}╔══{/yellow-fg}",
+    });
+    blessed.box({
+      parent: this.dialog,
+      top: 0, right: 0, width: 3, height: 1,
+      style: { fg: "yellow", bg: C.bgDialog },
+      tags: true,
+      content: "{yellow-fg}══╗{/yellow-fg}",
     });
 
     // ─── Title bar ───────────────────────────────────────────────────
-    this.titleBox = blessed.box({
+    this.titleBar = blessed.box({
       parent: this.dialog,
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: 1,
+      top: 0, left: 0,
+      width: "100%", height: 1,
       align: "center",
-      style: { fg: C.fgTitle, bg: C.bgTitleBar },
+      style: { fg: "yellow", bg: C.bgDialog },
       tags: true,
-      content: `{bold}{yellow-fg}▓▒░ TikTok Downloader v3.0 ░▒▓{/yellow-fg}{/bold}`
+      content: "{yellow-fg}{bold}[ NEXA DOWNLOADER SUITE v1.0 ]{/bold}{/yellow-fg}",
     });
 
+    // ─── Separator after title ────────────────────────────────────────
     this.sep1 = blessed.line({
       parent: this.dialog,
-      top: 1,
-      left: 0,
+      top: 1, left: 0,
       width: "100%",
       orientation: "horizontal",
-      style: { fg: C.fgSep, bg: C.bgDialog }
+      style: { fg: "blue", bg: C.bgDialog },
     });
 
-    // ─── URL Label ───────────────────────────────────────────────────
-    this.urlLabel = blessed.box({
+    // ─── ASCII Logo area ─────────────────────────────────────────────
+    this.logoBox = blessed.box({
       parent: this.dialog,
-      top: 3,
-      left: 2,
-      width: "100%-4",
-      height: 2,
-      style: { fg: C.fgLabel, bg: C.bgDialog },
+      top: 2, left: 0,
+      width: "100%", height: 9,
+      align: "center",
+      style: { fg: "cyan", bg: C.bgDialog },
       tags: true,
-      content: `{green-fg}{bold}► Enter TikTok URL:{/bold}{/green-fg}\n{white-fg}  (leave blank to exit){/white-fg}`
     });
 
-    // ─── Input box ───────────────────────────────────────────────────
-    this.inputBox = blessed.textbox({
-      parent: this.dialog,
-      top: 5,
-      left: 2,
-      width: "100%-4",
-      height: 3,
-      border: { type: "line", fg: C.fgBorder },
-      style: {
-        fg: C.fgInput,
-        bg: C.bgInput,
-        border: { fg: C.fgBorder },
-        focus: {
-          bg: C.bgInputFocus,
-          border: { fg: "yellow" }   // border kuning saat focused
-        }
-      },
-      inputOnFocus: true,
-      value: "",
-      tags: true
-    });
+    this.renderLogo();
 
-    // ─── Progress label ──────────────────────────────────────────────
-    this.progressLabel = blessed.box({
+    // ─── Separator after logo ─────────────────────────────────────────
+    blessed.line({
       parent: this.dialog,
-      top: 9,
-      left: 2,
-      width: "100%-4",
-      height: 1,
-      style: { fg: C.fgLabel, bg: C.bgDialog },
-      tags: true,
-      content: `{green-fg}{bold}Progress:{/bold}{/green-fg}`
-    });
-
-    // ─── Progress bar ────────────────────────────────────────────────
-    this.progressBar = blessed.progressbar({
-      parent: this.dialog,
-      top: 10,
-      left: 2,
-      width: "100%-4",
-      height: 1,
-      orientation: "horizontal",
-      style: {
-        bar: { bg: C.fgProgress, fg: C.bgMain },   // bar cyan on black
-        border: { fg: C.fgBorder }
-      },
-      filled: 0,
-      pch: "█",
-      tags: true
-    });
-
-    // ─── Status text ─────────────────────────────────────────────────
-    this.statusText = blessed.box({
-      parent: this.dialog,
-      top: 11,
-      left: 2,
-      width: "100%-4",
-      height: 1,
-      align: "right",
-      style: { fg: C.fgStatus, bg: C.bgDialog },
-      tags: true,
-      content: `{yellow-fg}{bold}● READY{/bold}{/yellow-fg}`
-    });
-
-    this.sep2 = blessed.line({
-      parent: this.dialog,
-      top: 13,
-      left: 0,
+      top: 11, left: 0,
       width: "100%",
       orientation: "horizontal",
-      style: { fg: C.fgSep, bg: C.bgDialog }
+      style: { fg: "blue", bg: C.bgDialog },
     });
 
-    // ─── Log label ───────────────────────────────────────────────────
-    this.logLabel = blessed.box({
+    // ─── Menu label ───────────────────────────────────────────────────
+    blessed.box({
       parent: this.dialog,
-      top: 14,
-      left: 2,
-      width: 12,
-      height: 1,
-      style: { fg: C.fgLabel, bg: C.bgDialog },
+      top: 12, left: 0,
+      width: "100%", height: 1,
+      align: "center",
+      style: { fg: "green", bg: C.bgDialog },
       tags: true,
-      content: `{green-fg}{bold}[ LOG ]{/bold}{/green-fg}`
+      content: "{green-fg}{bold}▼  SELECT PLATFORM  ▼{/bold}{/green-fg}",
     });
 
-    // ─── Log box ─────────────────────────────────────────────────────
-    this.logBox = blessed.log({
+    // ─── Menu container ───────────────────────────────────────────────
+    this.menuBox = blessed.box({
       parent: this.dialog,
-      top: 15,
-      left: 2,
-      width: "55%",
-      height: "100%-20",
-      border: { type: "line", fg: C.fgBorder },
-      style: {
-        fg: C.fgLog,
-        bg: C.bgLogBox,
-        border: { fg: C.fgBorder },
-        scrollbar: { bg: C.fgScrollbar }
-      },
-      scrollable: true,
-      alwaysScroll: true,
-      tags: true,
-      scrollbar: { ch: "▒", style: { bg: C.fgScrollbar, fg: C.bgMain } }
+      top: 14, left: "10%",
+      width: "80%", height: MENU_ITEMS.length * 4 + 2,
+      border: { type: "line", fg: "cyan" },
+      style: { bg: C.bgDialog, border: { fg: "cyan" } },
     });
 
-    // ─── Result label ─────────────────────────────────────────────────
-    this.resultLabel = blessed.box({
+    // ─── Render menu items ────────────────────────────────────────────
+    this.menuItemBoxes = [];
+    MENU_ITEMS.forEach((item, i) => {
+      const box = blessed.box({
+        parent: this.menuBox,
+        top: 1 + i * 4, left: 1,
+        width: "100%-2", height: 3,
+        border: { type: "line", fg: i === this.selectedIndex ? "yellow" : "blue" },
+        style: {
+          bg: i === this.selectedIndex ? "blue" : C.bgDialog,
+          border: { fg: i === this.selectedIndex ? "yellow" : "blue" },
+        },
+        tags: true,
+        mouse: true,
+        clickable: true,
+      });
+
+      const iconColor = item.color;
+      const numColor  = i === this.selectedIndex ? "yellow-fg" : "cyan-fg";
+
+      blessed.box({
+        parent: box,
+        top: 0, left: 1,
+        width: "100%-2", height: 1,
+        style: { bg: i === this.selectedIndex ? "blue" : C.bgDialog },
+        tags: true,
+        content:
+          `{${numColor}}{bold}[${item.key}]{/bold}{/${numColor}}  ` +
+          `{${iconColor}}{bold}${item.icon} ${item.label}{/bold}{/${iconColor}}`,
+      });
+
+      blessed.box({
+        parent: box,
+        top: 1, left: 4,
+        width: "100%-6", height: 1,
+        style: {
+          fg: "white",
+          bg: i === this.selectedIndex ? "blue" : C.bgDialog,
+        },
+        tags: true,
+        content: `{white-fg}    ${item.desc}{/white-fg}`,
+      });
+
+      box.on("click", () => {
+        this.selectedIndex = i;
+        this.refreshMenu();
+        this.launchSelected();
+      });
+
+      this.menuItemBoxes.push(box);
+    });
+
+    // ─── Hint below menu ─────────────────────────────────────────────
+    const menuBottom = 14 + MENU_ITEMS.length * 4 + 4;
+
+    this.hintBox = blessed.box({
       parent: this.dialog,
-      top: 14,
-      left: "55%+1",
-      width: 14,
-      height: 1,
-      style: { fg: C.fgLabel, bg: C.bgDialog },
+      top: menuBottom, left: 0,
+      width: "100%", height: 3,
+      align: "center",
+      style: { fg: "white", bg: C.bgDialog },
       tags: true,
-      content: `{green-fg}{bold}[ LINKS ]{/bold}{/green-fg}`
+      content:
+        "{cyan-fg}↑↓{/cyan-fg} / {cyan-fg}1 2 3{/cyan-fg} = Navigate  " +
+        "{yellow-fg}Enter{/yellow-fg} = Select  " +
+        "{red-fg}Ctrl+C{/red-fg} = Quit\n" +
+        "{white-fg}In downloader: {/white-fg}{cyan-fg}Ctrl+V{/cyan-fg}{white-fg} = Back to menu{/white-fg}",
     });
 
-    // ─── Result box ───────────────────────────────────────────────────
-    this.resultBox = blessed.box({
+    // ─── Decorative side ornaments ────────────────────────────────────
+    this.leftOrn = blessed.box({
       parent: this.dialog,
-      top: 15,
-      left: "55%+1",
-      width: "45%-3",
-      height: "100%-20",
-      border: { type: "line", fg: C.fgBorder },
-      style: {
-        fg: C.fgResult,
-        bg: C.bgResultBox,
-        border: { fg: C.fgBorder },
-        scrollbar: { bg: C.fgScrollbar }
-      },
-      scrollable: true,
-      alwaysScroll: true,
+      top: "50%", left: 1,
+      width: 3, height: 7,
+      style: { fg: "blue", bg: C.bgDialog },
       tags: true,
-      scrollbar: { ch: "▒", style: { bg: C.fgScrollbar, fg: C.bgMain } }
+      content: "{blue-fg}▌\n▌\n▌\n▌\n▌\n▌\n▌{/blue-fg}",
     });
 
-    // ─── Button bar ───────────────────────────────────────────────────
-    this.buttonBar = blessed.box({
+    this.rightOrn = blessed.box({
       parent: this.dialog,
-      top: "100%-4",
-      left: 0,
-      width: "100%",
-      height: 3,
-      border: { type: "line", fg: C.fgBorder },
-      style: {
-        fg: C.fgMain,
-        bg: C.bgDialog,
-        border: { fg: C.fgBorder }
-      },
+      top: "50%", right: 1,
+      width: 3, height: 7,
+      style: { fg: "blue", bg: C.bgDialog },
       tags: true,
-      align: "center",
-      valign: "middle"
+      content: "{blue-fg}▐\n▐\n▐\n▐\n▐\n▐\n▐{/blue-fg}",
     });
 
-    const btnStyle = {
-      fg: C.fgButton,
-      bg: C.bgButton,
-      focus: { bg: C.bgButtonFocus, fg: C.fgButtonFocus }
-    };
-
-    this.btnDownload = blessed.button({
-      parent: this.buttonBar,
-      top: 1,
-      left: "5%",
-      width: 14,
-      height: 1,
-      content: "{bold}{cyan-fg}[Download]{/cyan-fg}{/bold}",
+    // ─── Status bar ───────────────────────────────────────────────────
+    this.statusBar = blessed.box({
+      parent: this.dialog,
+      bottom: 1, left: 0,
+      width: "100%", height: 1,
       align: "center",
-      style: btnStyle,
+      style: { fg: "yellow", bg: C.bgDialog },
       tags: true,
-      mouse: true,
-      clickable: true
-    });
-
-    this.btnCopy = blessed.button({
-      parent: this.buttonBar,
-      top: 1,
-      left: "29%",
-      width: 14,
-      height: 1,
-      content: "{bold}{cyan-fg}[Copy URL]{/cyan-fg}{/bold}",
-      align: "center",
-      style: btnStyle,
-      tags: true,
-      mouse: true,
-      clickable: true
-    });
-
-    this.btnSave = blessed.button({
-      parent: this.buttonBar,
-      top: 1,
-      left: "54%",
-      width: 14,
-      height: 1,
-      content: "{bold}{cyan-fg}[Save File]{/cyan-fg}{/bold}",
-      align: "center",
-      style: btnStyle,
-      tags: true,
-      mouse: true,
-      clickable: true
-    });
-
-    this.btnQuit = blessed.button({
-      parent: this.buttonBar,
-      top: 1,
-      left: "79%",
-      width: 12,
-      height: 1,
-      content: "{bold}{red-fg}[Quit]{/red-fg}{/bold}",
-      align: "center",
-      style: {
-        fg: "red",
-        bg: C.bgButton,
-        focus: { bg: "red", fg: "white" }
-      },
-      tags: true,
-      mouse: true,
-      clickable: true
+      content: "{yellow-fg}● READY  |  NexaDev © 2025  |  v1.0.0{/yellow-fg}",
     });
 
     // ─── Footer ───────────────────────────────────────────────────────
     this.footer = blessed.box({
       parent: screen,
-      bottom: 0,
-      left: 0,
-      width: "100%",
-      height: 1,
+      bottom: 0, left: 0,
+      width: "100%", height: 1,
       style: { fg: C.fgFooter, bg: C.bgFooter },
       tags: true,
-      content: " {bold}Ctrl+S{/bold}=Copy  {bold}Ctrl+B{/bold}=Save  {bold}Ctrl+R{/bold}=Reset  {bold}Ctrl+C{/bold}=Quit  {bold}Alt+N{/bold}=About  {bold}↑↓{/bold}=SelectLink "
-    });
-
-    this.inputBox.focus();
-  }
-
-  // ─── About Dialog ──────────────────────────────────────────────────
-  showAbout() {
-    if (this.aboutVisible) return;
-    this.aboutVisible = true;
-
-    const dialogWidth = 52;
-    const dialogHeight = 18;
-    const left = Math.floor((this.screen.width - dialogWidth) / 2);
-    const top = Math.floor((this.screen.height - dialogHeight) / 2);
-
-    this.aboutShadow = blessed.box({
-      parent: this.screen,
-      top: top + 1,
-      left: left + 2,
-      width: dialogWidth,
-      height: dialogHeight,
-      style: { bg: "black" }
-    });
-
-    this.aboutBox = blessed.box({
-      parent: this.screen,
-      top: top,
-      left: left,
-      width: dialogWidth,
-      height: dialogHeight,
-      border: { type: "line", fg: "yellow" },
-      style: { bg: C.bgAbout, border: { fg: "yellow" } },
-      tags: true
-    });
-
-    blessed.box({
-      parent: this.aboutBox,
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: 1,
-      align: "center",
-      style: { fg: "yellow", bg: C.bgAbout },
-      tags: true,
-      content: "{bold}{yellow-fg}▒ About This Program ▒{/yellow-fg}{/bold}"
-    });
-
-    blessed.line({
-      parent: this.aboutBox,
-      top: 1,
-      left: 0,
-      width: "100%",
-      orientation: "horizontal",
-      style: { fg: "yellow", bg: C.bgAbout }
-    });
-
-    blessed.box({
-      parent: this.aboutBox,
-      top: 3,
-      left: 2,
-      width: "100%-4",
-      height: "100%-6",
-      style: { fg: C.fgAbout, bg: C.bgAbout },
-      tags: true,
       content:
-        "{center}{bold}{cyan-fg}TikTok Downloader{/cyan-fg}{/bold}{/center}\n" +
-        "{center}{white-fg}Version 3.0 - Retro Edition{/white-fg}{/center}\n\n" +
-        "  {green-fg}{bold}Project:{/bold}{/green-fg}    TikTok Downloader\n" +
-        "  {green-fg}{bold}Creator:{/bold}{/green-fg}    NexaDev\n" +
-        "  {green-fg}{bold}Scraper:{/bold}{/green-fg}    Ditzzx\n\n" +
-        "  {green-fg}{bold}Features:{/bold}{/green-fg}\n" +
-        "    {cyan-fg}•{/cyan-fg} SnapTik API Integration\n" +
-        "    {cyan-fg}•{/cyan-fg} Obfuscated Response Decoder\n" +
-        "    {cyan-fg}•{/cyan-fg} Direct File Download\n" +
-        "    {cyan-fg}•{/cyan-fg} Retro Computer UI\n\n" +
-        "{center}{yellow-fg}Press Alt+M to close{/yellow-fg}{/center}"
+        " {bold}↑↓{/bold}=Navigate  {bold}Enter{/bold}=Select  {bold}1{/bold}=TikTok  {bold}2{/bold}=Instagram  {bold}3{/bold}=YouTube  {bold}Ctrl+C{/bold}=Quit ",
+    });
+  }
+
+  renderLogo() {
+    const colors = ["cyan", "cyan", "cyan", "blue", "blue", "blue", "yellow"];
+    let content = "";
+    LOGO.forEach((line, i) => {
+      const col = colors[i] || "cyan";
+      content += `{${col}-fg}${line}{/${col}-fg}\n`;
+    });
+    this.logoBox.setContent(content);
+  }
+
+  refreshMenu() {
+    MENU_ITEMS.forEach((item, i) => {
+      const box  = this.menuItemBoxes[i];
+      const isSelected = i === this.selectedIndex;
+
+      box.style.bg     = isSelected ? "blue" : C.bgDialog;
+      box.style.border = { fg: isSelected ? "yellow" : "blue" };
+      box.border       = { type: "line", fg: isSelected ? "yellow" : "blue" };
+
+      // update children
+      const children = box.children;
+      if (children[0]) {
+        const numColor  = isSelected ? "yellow-fg" : "cyan-fg";
+        const iconColor = item.color;
+        children[0].setContent(
+          `{${numColor}}{bold}[${item.key}]{/bold}{/${numColor}}  ` +
+          `{${iconColor}}{bold}${item.icon} ${item.label}{/bold}{/${iconColor}}`
+        );
+        children[0].style.bg = isSelected ? "blue" : C.bgDialog;
+      }
+      if (children[1]) {
+        children[1].style.bg = isSelected ? "blue" : C.bgDialog;
+      }
     });
 
     this.screen.render();
   }
 
-  hideAbout() {
-    if (!this.aboutVisible) return;
-    this.aboutVisible = false;
-    if (this.aboutBox) {
-      this.aboutBox.destroy();
-      this.aboutShadow.destroy();
-    }
-    this.screen.render();
+  startAnimations() {
+    // Blinking cursor in status bar
+    let blink = true;
+    this._blinkTimer = setInterval(() => {
+      blink = !blink;
+      const dot = blink ? "●" : "○";
+      this.statusBar.setContent(
+        `{yellow-fg}${dot} READY  |  NexaDev © 2025  |  v1.0.0{/yellow-fg}`
+      );
+      this.screen.render();
+    }, 600);
   }
 
   bindKeys() {
-    // ─── Ctrl+S: Copy URL (CHANGED from Ctrl+A) ───
-    this.screen.key(["C-s"], async () => {
-      await this.doCopy();
+    // Number shortcuts
+    this.screen.key(["1"], () => {
+      this.selectedIndex = 0;
+      this.refreshMenu();
+      this.launchSelected();
+    });
+    this.screen.key(["2"], () => {
+      this.selectedIndex = 1;
+      this.refreshMenu();
+      this.launchSelected();
+    });
+    this.screen.key(["3"], () => {
+      this.selectedIndex = 2;
+      this.refreshMenu();
+      this.launchSelected();
     });
 
-    // ─── Ctrl+B: Download to storage ───
-    this.screen.key(["C-b"], async () => {
-      await this.doDownloadFile();
+    // Arrow navigation
+    this.screen.key(["up", "k"], () => {
+      this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+      this.refreshMenu();
+    });
+    this.screen.key(["down", "j"], () => {
+      this.selectedIndex = Math.min(MENU_ITEMS.length - 1, this.selectedIndex + 1);
+      this.refreshMenu();
     });
 
-    // ─── Ctrl+R: Reset ───
-    this.screen.key(["C-r"], () => {
-      this.reset();
+    // Enter to launch
+    this.screen.key(["enter"], () => {
+      this.launchSelected();
     });
 
-    // ─── Ctrl+C: Quit ───
+    // Ctrl+C to quit
     this.screen.key(["C-c"], () => {
-      this.doQuit();
-    });
-
-    // ─── Alt+N: About ───
-    this.screen.key(["M-n"], () => {
-      this.showAbout();
-    });
-
-    // ─── Alt+M: Close About ───
-    this.screen.key(["M-m"], () => {
-      this.hideAbout();
-    });
-
-    // ─── Enter on input ───
-    this.inputBox.key(["enter"], async () => {
-      const url = this.inputBox.getValue().trim();
-      if (!url) {
-        this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} URL is empty!`);
-        return;
-      }
-      await this.download(url);
-    });
-
-    // ─── Tab: cycle focus ───
-    this.screen.key(["tab"], () => {
-      const focusOrder = ["input", "download", "copy", "save", "quit"];
-      const currentIdx = focusOrder.indexOf(this.currentFocus);
-      const nextIdx = (currentIdx + 1) % focusOrder.length;
-      this.currentFocus = focusOrder[nextIdx];
-
-      switch (this.currentFocus) {
-        case "input":    this.inputBox.focus();    break;
-        case "download": this.btnDownload.focus(); break;
-        case "copy":     this.btnCopy.focus();     break;
-        case "save":     this.btnSave.focus();     break;
-        case "quit":     this.btnQuit.focus();     break;
-      }
-    });
-
-    // ─── Button clicks ───
-    this.btnDownload.on("press", async () => {
-      const url = this.inputBox.getValue().trim();
-      if (!url) { this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} URL is empty!`); return; }
-      await this.download(url);
-    });
-
-    this.btnCopy.on("press",  async () => { await this.doCopy(); });
-    this.btnSave.on("press",  async () => { await this.doDownloadFile(); });
-    this.btnQuit.on("press",  ()       => { this.doQuit(); });
-
-    // ─── Arrow keys ───
-    this.screen.key(["up"], () => {
-      if (this.downloadResult?.links?.length > 0) {
-        this.selectedLinkIndex = Math.max(0, this.selectedLinkIndex - 1);
-        this.displayResult(this.downloadResult, null);
-      }
-    });
-
-    this.screen.key(["down"], () => {
-      if (this.downloadResult?.links?.length > 0) {
-        this.selectedLinkIndex = Math.min(
-          this.downloadResult.links.length - 1,
-          this.selectedLinkIndex + 1
-        );
-        this.displayResult(this.downloadResult, null);
-      }
+      this.screen.destroy();
+      process.exit(0);
     });
   }
 
-  async doCopy() {
-    if (this.downloadResult?.links?.length > 0) {
-      const url = this.downloadResult.links[this.selectedLinkIndex]?.url ||
-                  this.downloadResult.links[0].url;
-      try {
-        await copyToClipboard(url);
-        this.log(`{green-fg}✔ OK:{/green-fg} URL copied to clipboard!`);
-        this.setStatus("COPIED ✔");
-      } catch (err) {
-        this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} ${err.message}`);
-        this.setStatus("COPY FAILED ✘");
-      }
-    } else {
-      this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} No URL to copy!`);
-    }
-  }
+  launchSelected() {
+    if (this.inSubApp) return;
 
-  async doDownloadFile() {
-    if (!this.downloadResult?.links?.length > 0) {
-      this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} No URL to download! Process a URL first.`);
-      return;
-    }
+    const item = MENU_ITEMS[this.selectedIndex];
+    if (!item) return;
 
-    const url = this.downloadResult.links[this.selectedLinkIndex]?.url ||
-                this.downloadResult.links[0].url;
+    clearInterval(this._blinkTimer);
+    this.screen.destroy();
+    this.inSubApp = true;
 
-    let filename = "tiktok-video.mp4";
-    if (this.downloadResult.title) {
-      const safeTitle = this.downloadResult.title
-        .replace(/[^a-zA-Z0-9\u0000-\u007F]/g, "_")
-        .substring(0, 50);
-      filename = `${safeTitle}.mp4`;
-    }
+    const scriptPath = path.join(__dirname, item.script);
 
-    const outputPath = getDownloadPath(filename);
+    const child = spawn(process.execPath, [scriptPath], {
+      stdio: "inherit",
+      env: { ...process.env, NEXA_PARENT: "1" },
+    });
 
-    this.log(`{cyan-fg}[DL] Starting download...{/cyan-fg}`);
-    this.setStatus("DOWNLOADING...");
-
-    try {
-      await downloadFile(url, outputPath, (percent) => {
-        this.setProgress(percent);
-        this.setStatus(`DOWNLOADING ${percent}%`);
+    child.on("exit", () => {
+      // Re-launch menu when child exits (Ctrl+V triggers exit in child)
+      this.inSubApp = false;
+      // Restart self
+      spawn(process.execPath, [fileURLToPath(import.meta.url)], {
+        stdio: "inherit",
+        detached: false,
       });
-
-      this.log(`{green-fg}✔ [OK]{/green-fg} Saved to: {white-fg}${outputPath}{/white-fg}`);
-      this.setStatus("SAVED ✔");
-      this.setProgress(100);
-    } catch (err) {
-      this.log(`{red-fg}✘ ERROR:{/red-fg} Download failed: ${err.message}`);
-      this.setStatus("DOWNLOAD FAILED ✘");
-      this.setProgress(0);
-    }
-  }
-
-  doQuit() {
-    this.log(`{white-fg}Shutting down...{/white-fg}`);
-    this.setStatus("EXITING...");
-    setTimeout(() => process.exit(0), 500);
-  }
-
-  log(message) {
-    const timestamp = new Date().toLocaleTimeString("id-ID", { hour12: false });
-    this.logBox.log(`{white-fg}[${timestamp}]{/white-fg} ${message}`);
-    this.screen.render();
-  }
-
-  setStatus(status) {
-    // Warna status otomatis berdasarkan keyword
-    let colored = status;
-    if (status.includes("READY"))       colored = `{yellow-fg}{bold}● ${status}{/bold}{/yellow-fg}`;
-    else if (status.includes("COMPLETE") || status.includes("SAVED") || status.includes("COPIED"))
-                                         colored = `{green-fg}{bold}● ${status}{/bold}{/green-fg}`;
-    else if (status.includes("FAILED") || status.includes("ERROR"))
-                                         colored = `{red-fg}{bold}● ${status}{/bold}{/red-fg}`;
-    else if (status.includes("PROCESSING") || status.includes("DOWNLOADING"))
-                                         colored = `{cyan-fg}{bold}● ${status}{/bold}{/cyan-fg}`;
-    else                                 colored = `{white-fg}{bold}● ${status}{/bold}{/white-fg}`;
-
-    this.statusText.setContent(colored);
-    this.screen.render();
-  }
-
-  setProgress(percent) {
-    this.progressBar.setProgress(percent);
-    this.screen.render();
-  }
-
-  reset() {
-    this.inputBox.setValue("");
-    this.resultBox.setContent(`{cyan-fg}{center}── No results yet ──{/center}{/cyan-fg}`);
-    this.downloadResult = null;
-    this.selectedLinkIndex = 0;
-    this.setProgress(0);
-    this.log(`{white-fg}Form reset{/white-fg}`);
-    this.setStatus("READY");
-    this.inputBox.focus();
-    this.currentFocus = "input";
-    this.screen.render();
-  }
-
-  async download(url) {
-    if (this.isProcessing) {
-      this.log(`{yellow-fg}⚠ WARNING:{/yellow-fg} Already processing!`);
-      return;
-    }
-
-    this.isProcessing = true;
-    this.currentUrl = url;
-    this.downloadResult = null;
-    this.selectedLinkIndex = 0;
-    this.setProgress(0);
-    this.setStatus("PROCESSING");
-    this.log(`{cyan-fg}► Target:{/cyan-fg} ${url.substring(0, 50)}...`);
-
-    try {
-      this.setProgress(10);
-      this.log(`{cyan-fg}[1/4]{/cyan-fg} Fetching token...`);
-      const home = await openHome();
-      this.log(`{green-fg}✔ [OK]{/green-fg} Token: ${home.token.substring(0, 25)}...`);
-      this.setProgress(25);
-
-      this.log(`{cyan-fg}[2/4]{/cyan-fg} Submitting to SnapTik...`);
-      const post = await submitVideo(url, home.token);
-      this.log(`{green-fg}✔ [OK]{/green-fg} HTTP {white-fg}${post.status}{/white-fg}`);
-      this.setProgress(50);
-
-      this.log(`{cyan-fg}[3/4]{/cyan-fg} Decoding obfuscated response...`);
-      const decoded = decodeObfuscatedResponse(post.body);
-      this.log(`{green-fg}✔ [OK]{/green-fg} Decoded: {white-fg}${decoded.length} chars{/white-fg}`);
-      this.setProgress(75);
-
-      this.log(`{cyan-fg}[4/4]{/cyan-fg} Extracting download links...`);
-      const result = await extractResult(decoded);
-      this.downloadResult = result;
-      this.setProgress(90);
-
-      let render = null;
-      if (result.render_token) {
-        this.log(`{cyan-fg}[RND]{/cyan-fg} Async render started...`);
-        render = await renderVideo(result.render_token);
-        if (render?.download_url) {
-          this.log(`{green-fg}✔ [OK]{/green-fg} Render complete!`);
-        }
-      }
-
-      this.setProgress(100);
-      this.displayResult(result, render);
-      this.log(`{green-fg}✔ {bold}[DONE]{/bold} Download ready!{/green-fg}`);
-      this.setStatus("COMPLETE");
-
-    } catch (err) {
-      this.setProgress(0);
-      this.log(`{red-fg}✘ ERROR: ${err.message}{/red-fg}`);
-      this.setStatus("FAILED");
-      this.resultBox.setContent(
-        `{red-fg}{bold}✘ ERROR:{/bold}{/red-fg}\n{white-fg}${err.message}{/white-fg}`
-      );
-    } finally {
-      this.isProcessing = false;
-      this.screen.render();
-    }
-  }
-
-  displayResult(result, render) {
-    let content = "";
-
-    if (result.title) {
-      content += `{yellow-fg}{bold}Title:{/bold}{/yellow-fg}  {white-fg}${result.title}{/white-fg}\n`;
-    }
-    if (result.author) {
-      content += `{yellow-fg}{bold}Author:{/bold}{/yellow-fg} {white-fg}${result.author}{/white-fg}\n`;
-    }
-    if (result.thumbnail) {
-      content += `{yellow-fg}{bold}Thumb:{/bold}{/yellow-fg}  {white-fg}${result.thumbnail.substring(0, 32)}...{/white-fg}\n`;
-    }
-
-    content += `\n{green-fg}{bold}Download Links:{/bold}{/green-fg}\n`;
-
-    if (result.links && result.links.length > 0) {
-      result.links.forEach((link, i) => {
-        const isSelected = i === this.selectedLinkIndex;
-        const marker = isSelected
-          ? `{black-fg}{cyan-bg} ▶ {/cyan-bg}{/black-fg}`
-          : `   `;
-        const numColor = isSelected ? `{cyan-fg}{bold}` : `{white-fg}`;
-        const numEnd   = isSelected ? `{/bold}{/cyan-fg}` : `{/white-fg}`;
-        content += `${marker} ${numColor}${i + 1}. ${link.text}${numEnd}\n`;
-        content += `       {white-fg}${link.url.substring(0, 35)}...{/white-fg}\n\n`;
-      });
-      content += `\n{yellow-fg}↑↓ select  Ctrl+S copy  Ctrl+B save{/yellow-fg}\n`;
-    } else {
-      content += `  {red-fg}No links found{/red-fg}\n`;
-    }
-
-    if (render?.download_url) {
-      content += `\n{green-fg}{bold}Render:{/bold}{/green-fg}\n  {white-fg}${render.download_url}{/white-fg}\n`;
-    }
-
-    this.resultBox.setContent(content);
-    this.screen.render();
-  }
-
-  start() {
-    this.log(`{magenta-fg}[BOOT]{/magenta-fg} {bold}TikTok Downloader v3.0{/bold}`);
-    this.log(`{magenta-fg}[BOOT]{/magenta-fg} SnapTik API connected`);
-    this.log(`{cyan-fg}[INFO]{/cyan-fg} Paste URL and press {bold}Enter{/bold}`);
-    this.log(`{cyan-fg}[INFO]{/cyan-fg} Ctrl+S=Copy  Ctrl+B=Save  Ctrl+R=Reset`);
-    this.setStatus("READY");
-    this.screen.render();
+    });
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  BOOT
 // ═══════════════════════════════════════════════════════════════════════════════
-
-const app = new RetroTikTokDownloader();
-app.start();
+const menu = new NexaMenu();
+menu.screen.render();
