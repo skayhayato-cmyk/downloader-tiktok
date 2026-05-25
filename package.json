@@ -1,30 +1,35 @@
 {
-  "name": "tiktok-downloader-retro",
-  "version": "3.0.0",
-  "description": "TikTok Downloader with Retro Computer TUI",
+  "name": "nexa-downloader-suite",
+  "version": "1.0.0",
+  "description": "NEXA Multi-Platform Downloader Suite (TikTok, Instagram, YouTube) - Retro TUI",
   "main": "index.js",
   "type": "module",
   "bin": {
-    "tiktok-dl": "./index.js"
+    "nexa-dl": "./index.js"
   },
   "scripts": {
     "start": "node index.js"
   },
   "keywords": [
     "tiktok",
+    "instagram",
+    "youtube",
     "downloader",
     "retro",
     "tui",
-    "cli"
+    "cli",
+    "nexa"
   ],
   "author": "NexaDev",
   "license": "MIT",
   "dependencies": {
+    "@vreden/youtube_scraper": "^1.0.0",
     "axios": "^1.7.9",
     "axios-cookiejar-support": "^5.0.5",
     "blessed": "^0.1.81",
     "cheerio": "^1.0.0",
     "form-data": "^4.0.2",
+    "socket.io-client": "^4.7.5",
     "tough-cookie": "^5.1.2"
   }
 }
